@@ -9,32 +9,11 @@ const DISABLE_ACTIVITY = process.env.DISABLE_ACTIVITY_COMMAND === '1';
 
 const ACTIVITIES = {
     'youtube': '880218394199220334',
-    'poker': '755827207812677713',
-    'chess': '832012774040141894',
-    'checkers': '832013003968348200',
-    'letter-league': '879863686565621790',
-    'spellcast': '852509694341283871',
-    'sketch': '902271654783242291',
-    'blazing8s': '832025144389533716',
-    'puttparty': '945737671223947305',
-    'landio': '903769130790969345',
-    'bobble': '947957217959759964',
-    'knowwhat': '976052223358406656'
+
 };
 
 const ACTIVITY_NAMES = {
-    'youtube': 'YouTube Together',
-    'poker': 'Poker Night',
-    'chess': 'Chess in the Park',
-    'checkers': 'Checkers in the Park',
-    'letter-league': 'Letter League',
-    'spellcast': 'SpellCast',
-    'sketch': 'Sketch Heads',
-    'blazing8s': 'Blazing 8s',
-    'puttparty': 'Putt Party',
-    'landio': 'Land-io',
-    'bobble': 'Bobble League',
-    'knowwhat': 'Know What I Mean'
+    'youtube': 'YouTube Together :3',
 };
 
 export default {
