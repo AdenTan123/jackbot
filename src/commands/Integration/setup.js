@@ -14,7 +14,8 @@ export default {
     .addStringOption(o => o.setName('api_key').setDescription('Marizma API key').setRequired(true))
     .addBooleanOption(o => o.setName('use_default_base').setDescription('Use default base URL? (if false, provide base_url)'))
     .addStringOption(o => o.setName('base_url').setDescription('Custom base URL (optional)'))
-    .addStringOption(o => o.setName('roles').setDescription('Comma-separated role IDs or mentions allowed to use Marizma commands')),
+    .addStringOption(o => o.setName('perm_roles').setDescription('Comma-separated role IDs or mentions allowed to use Marizma commands'))
+    .addRoleOption(o => o.setName('perm_role').setDescription('A single role allowed to use Marizma commands (optional)')),
 
   async execute(interaction) {
     const deferred = await InteractionHelper.safeDefer(interaction);
@@ -24,7 +25,8 @@ export default {
       const apiKey = interaction.options.getString('api_key', true).trim();
       const useDefault = interaction.options.getBoolean('use_default_base');
       const baseUrl = useDefault === false ? (interaction.options.getString('base_url') || '') : DEFAULT_BASE;
-      const rolesRaw = interaction.options.getString('roles');
+      const rolesRaw = interaction.options.getString('perm_roles');
+      const singleRole = interaction.options.getRole('perm_role');
 
       // parse roles: accept mentions or ids separated by comma/space
       const allowedRoleIds = [];
@@ -34,6 +36,10 @@ export default {
           const match = p.match(/(\d{17,19})/);
           if (match) allowedRoleIds.push(match[1]);
         }
+      }
+
+      if (singleRole && singleRole.id) {
+        if (!allowedRoleIds.includes(singleRole.id)) allowedRoleIds.push(singleRole.id);
       }
 
       // save into guild config under key `marizma`
