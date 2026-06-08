@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { SlashCommandBuilder, ActionRowBuilder, ModalBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { logger } from '../../utils/logger.js';
 import fs from 'fs/promises';
@@ -37,8 +37,7 @@ export default {
     .setDescription('Open the Debug Test modal (developer logs)'),
 
   async execute(interaction) {
-    const ready = await InteractionHelper.ensureReady(interaction, { flags: 0 });
-    if (!ready) return;
+    if (!InteractionHelper.isInteractionValid(interaction)) return;
 
     try {
       const modal = new ModalBuilder()
@@ -62,7 +61,7 @@ export default {
       await interaction.showModal(modal);
     } catch (error) {
       logger.error('Failed to show TestModal:', error);
-      await InteractionHelper.safeReply(interaction, { content: 'Could not open debug modal.', flags: 1 << 6 });
+      await InteractionHelper.safeReply(interaction, { content: 'Could not open debug modal.', flags: MessageFlags.Ephemeral });
     }
   },
 };
