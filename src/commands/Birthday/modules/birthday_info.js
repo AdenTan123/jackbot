@@ -1,3 +1,4 @@
+import { getColor } from '../../config/bot.js';
 import { MessageFlags } from 'discord.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../../utils/embeds.js';
 import { getUserBirthday } from '../../../services/birthdayService.js';

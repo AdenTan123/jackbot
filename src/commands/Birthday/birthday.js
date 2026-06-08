@@ -82,37 +82,15 @@ export default {
             switch (subcommand) {
                 case 'set':
                     return await birthdaySet.execute(interaction, config, client);
-                case 'info':
-                    return await birthdayInfo.execute(interaction, config, client);
-                case 'list':
-                    return await birthdayList.execute(interaction, config, client);
-                case 'remove':
-                    return await birthdayRemove.execute(interaction, config, client);
-                case 'next':
+                        async execute(interaction) {
+                            if (!interaction.deferred && !interaction.replied) {
+                                await interaction.reply({ content: 'This command has been removed.', ephemeral: true });
+                            } else {
+                                await interaction.followUp({ content: 'This command has been removed.', ephemeral: true });
+                            }
+                        }
                     return await nextBirthdays.execute(interaction, config, client);
+
                 case 'setchannel':
+
                     return await birthdaySetchannel.execute(interaction, config, client);
-                default:
-                    return InteractionHelper.safeReply(interaction, {
-                        embeds: [errorEmbed('Error', 'Unknown subcommand')],
-                        flags: MessageFlags.Ephemeral
-                    });
-            }
-        } catch (error) {
-            logger.error('Birthday command execution failed', {
-                error: error.message,
-                stack: error.stack,
-                userId: interaction.user.id,
-                guildId: interaction.guildId,
-                commandName: 'birthday',
-                subcommand: interaction.options.getSubcommand()
-            });
-            await handleInteractionError(interaction, error, {
-                commandName: 'birthday',
-                source: 'birthday_command'
-            });
-        }
-    }
-};
-
-

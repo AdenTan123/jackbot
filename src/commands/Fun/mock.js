@@ -26,36 +26,26 @@ export default {
       if (!originalText || originalText.trim().length === 0) {
         throw new TitanBotError(
           'Empty text provided to mock command',
-          ErrorTypes.USER_INPUT,
-          'Please provide some text to mock!'
-        );
-      }
+          import path from 'path';
+          import { fileURLToPath } from 'url';
+          import { SlashCommandBuilder } from 'discord.js';
 
-      
-      const sanitizedText = sanitizeInput(originalText, 1000);
+          const __filename = fileURLToPath(import.meta.url);
+          const name = path.basename(__filename, '.js');
 
-      let mockedText = "";
-      for (let i = 0; i < sanitizedText.length; i++) {
-        const char = sanitizedText[i];
-        if (i % 2 === 0) {
-          mockedText += char.toLowerCase();
-        } else {
-          mockedText += char.toUpperCase();
-        }
-      }
-
+          export default {
+            data: new SlashCommandBuilder().setName(name).setDescription('Removed command').setDMPermission(false),
+            category: 'Fun',
+            async execute(interaction) {
+              if (!interaction.deferred && !interaction.replied) {
+                await interaction.reply({ content: 'This command has been removed.', ephemeral: true });
+              } else {
+                await interaction.followUp({ content: 'This command has been removed.', ephemeral: true });
+              }
+            }
+          };
       const embed = successEmbed("sPoNgEbOb cAsE", `"${mockedText}"`);
 
+
+
       await InteractionHelper.safeReply(interaction, { embeds: [embed] });
-      logger.debug(`Mock command executed by user ${interaction.user.id} in guild ${interaction.guildId}`);
-    } catch (error) {
-      logger.error('Mock command error:', error);
-      await handleInteractionError(interaction, error, {
-        commandName: 'mock',
-        source: 'mock_command'
-      });
-    }
-  },
-};
-
-
