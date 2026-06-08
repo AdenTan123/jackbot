@@ -5,6 +5,8 @@ import { handleInteractionError } from '../../utils/errorHandler.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { getColor } from '../../config/bot.js';
 
+const DISABLE_ACTIVITY = process.env.DISABLE_ACTIVITY_COMMAND === '1';
+
 const ACTIVITIES = {
     'youtube': '880218394199220334',
     'poker': '755827207812677713',
@@ -118,6 +120,10 @@ export default {
 
     async execute(interaction, config, client) {
         try {
+                if (DISABLE_ACTIVITY) {
+                    await InteractionHelper.safeReply(interaction, { embeds: [errorEmbed('Command Disabled', 'The activity command has been disabled by the server administrator.')], flags: MessageFlags.Ephemeral });
+                    return;
+                }
             
             const deferred = await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
             if (!deferred) {
