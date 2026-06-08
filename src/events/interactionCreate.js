@@ -1,4 +1,4 @@
-import { Events, MessageFlags } from 'discord.js';
+import { Events, MessageFlags, PermissionFlagsBits } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getGuildConfig } from '../services/guildConfig.js';
 import { handleApplicationModal } from '../commands/Community/apply.js';
@@ -85,6 +85,32 @@ export default {
                   'This command has been disabled for this server.',
                   withTraceContext({ commandName: interaction.commandName, guildId: interaction.guild.id }, interactionTraceContext)
                 );
+              }
+            }
+
+            // Enforce per-command role permissions if configured
+            if (interaction.guild && guildConfig) {
+              try {
+                const perms = guildConfig.commandPermissions || {};
+                const allowed = perms[interaction.commandName];
+                if (Array.isArray(allowed) && allowed.length > 0) {
+                  const member = interaction.member;
+                  const hasManage = member?.permissions?.has?.(PermissionFlagsBits.ManageGuild) || false;
+                  if (!hasManage) {
+                    const memberRoles = member?.roles?.cache ? Array.from(member.roles.cache.keys()) : [];
+                    const intersection = memberRoles.filter(r => allowed.includes(r));
+                    if (intersection.length === 0) {
+                      throw createError(
+                        `User ${interaction.user.id} not permitted to run ${interaction.commandName}`,
+                        ErrorTypes.PERMISSION,
+                        'You do not have permission to use this command in this server.',
+                        withTraceContext({ commandName: interaction.commandName, guildId: interaction.guild.id }, interactionTraceContext)
+                      );
+                    }
+                  }
+                }
+              } catch (permError) {
+                throw permError;
               }
             }
 
