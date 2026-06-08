@@ -33,16 +33,22 @@ async function getRecentLogs(maxChars = 3500) {
 
 export default {
   data: new SlashCommandBuilder()
-    .setName('testmodal')
-    .setDescription('Open the Debug Test modal (developer logs)'),
+    .setName('debugmodal')
+    .setDescription('Debug Modal For Developers Only (Bot Owner Only)'),
 
   async execute(interaction) {
     if (!InteractionHelper.isInteractionValid(interaction)) return;
 
+    const allowedUserId = '1208248683746037760';
+    if (interaction.user?.id !== allowedUserId) {
+      await InteractionHelper.safeReply(interaction, { content: 'You are not authorized to use this command.', flags: MessageFlags.Ephemeral });
+      return;
+    }
+
     try {
       const modal = new ModalBuilder()
         .setCustomId('test_debug_modal')
-        .setTitle('Debug Test');
+        .setTitle('Debug Modal');
 
       const logs = await getRecentLogs(3500);
 
