@@ -26,9 +26,19 @@ function progressBar(elapsedSec, totalSec, size = 16) {
 
 /** Parse "mm:ss" → seconds */
 function parseDuration(dur) {
-    if (!dur || dur === 'Live') return 0;
-    const parts = dur.split(':').map(Number);
-    return parts.length === 2 ? parts[0] * 60 + parts[1] : 0;
+    if (!dur || dur === 'Live' || dur === '0:00') return 0;
+    
+    if (dur.includes(':')) {
+        const parts = dur.split(':').map(Number);
+        if (parts.length === 2) {
+            return parts[0] * 60 + parts[1];
+        } else if (parts.length === 3) {
+            return parts[0] * 3600 + parts[1] * 60 + parts[2];
+        }
+    }
+    
+    const seconds = parseInt(dur);
+    return isNaN(seconds) ? 0 : seconds;
 }
 
 export default {

@@ -84,10 +84,9 @@ function buildPlaylistEmbed(guildId, page) {
         .setLabel('🔄 Refresh')
         .setStyle(ButtonStyle.Primary);
 
-    const components =
-        totalPages > 1 || true
-            ? [new ActionRowBuilder().addComponents(prev, refresh, next)]
-            : [];
+    const components = totalPages > 0
+        ? [new ActionRowBuilder().addComponents(prev, refresh, next)]
+        : [];
 
     return { embed, components, totalPages, safePage };
 }
