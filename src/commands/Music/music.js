@@ -1,5 +1,5 @@
 /**
- * /music — Main music command.
+ * /music — Main music command with separate join functionality
  */
 
 import {
@@ -83,8 +83,13 @@ export default {
         .setDescription('Music player commands')
         .addSubcommand((sub) =>
             sub
+                .setName('join')
+                .setDescription('Make the bot join your voice channel'),
+        )
+        .addSubcommand((sub) =>
+            sub
                 .setName('play')
-                .setDescription('Search YouTube and play a song (or add to queue)')
+                .setDescription('Search YouTube and play a song (bot must be in VC first)')
                 .addStringOption((o) =>
                     o
                         .setName('query')
@@ -120,7 +125,8 @@ export default {
         const sub = interaction.options.getSubcommand();
 
         try {
-            if (sub === 'play') await handlePlay(interaction);
+            if (sub === 'join') await handleJoin(interaction);
+            else if (sub === 'play') await handlePlay(interaction);
             else if (sub === 'stop') await handleStop(interaction);
             else if (sub === 'admin') await handleAdmin(interaction);
         } catch (error) {
@@ -132,6 +138,69 @@ export default {
         }
     },
 };
+
+// ─── JOIN COMMAND ─────────────────────────────────────────────────────────
+
+async function handleJoin(interaction) {
+    const member = interaction.member;
+    const voiceChannel = member?.voice?.channel;
+
+    if (!voiceChannel) {
+        return InteractionHelper.safeEditReply(interaction, {
+            embeds: [
+                createEmbed({
+                    title: '❌ Not in a Voice Channel',
+                    description: 'You need to join a voice channel first!',
+                    color: 'error',
+                }),
+            ],
+        });
+    }
+
+    const botMember = interaction.guild.members.me;
+    if (!voiceChannel.permissionsFor(botMember).has('Connect')) {
+        return InteractionHelper.safeEditReply(interaction, {
+            embeds: [
+                createEmbed({
+                    title: '❌ Missing Permission',
+                    description: `I don't have permission to join ${voiceChannel.name}!`,
+                    color: 'error',
+                }),
+            ],
+        });
+    }
+
+    try {
+        await MusicService.join(voiceChannel);
+        
+        // Clear inactivity timeout and keep connected
+        const queue = MusicService._getQueue(interaction.guildId);
+        queue._clearInactivityTimeout();
+        
+        return InteractionHelper.safeEditReply(interaction, {
+            embeds: [
+                createEmbed({
+                    title: '✅ Joined Voice Channel',
+                    description: `Successfully joined **${voiceChannel.name}**! Use \`/music play\` to add songs.`,
+                    color: 'success',
+                }),
+            ],
+        });
+    } catch (error) {
+        logger.error('[music/join] Error:', error);
+        return InteractionHelper.safeEditReply(interaction, {
+            embeds: [
+                createEmbed({
+                    title: '❌ Failed to Join',
+                    description: `Could not join ${voiceChannel.name}. Please try again.`,
+                    color: 'error',
+                }),
+            ],
+        });
+    }
+}
+
+// ─── PLAY COMMAND ─────────────────────────────────────────────────────────
 
 async function handlePlay(interaction) {
     const member = interaction.member;
@@ -146,47 +215,41 @@ async function handlePlay(interaction) {
                     color: 'error',
                 }),
             ],
-            flags: MessageFlags.Ephemeral,
         });
     }
 
+    // Check if bot is in a voice channel
     const botMember = interaction.guild.members.me;
-    if (!voiceChannel.permissionsFor(botMember).has(['Connect', 'Speak'])) {
+    const botVoiceChannel = botMember.voice.channel;
+    
+    if (!botVoiceChannel) {
         return InteractionHelper.safeEditReply(interaction, {
             embeds: [
                 createEmbed({
-                    title: '❌ Missing Permissions',
-                    description: `I need permission to **Connect** and **Speak** in ${voiceChannel.name}`,
+                    title: '❌ Bot Not in Voice Channel',
+                    description: 'Use `/music join` first to make me join your voice channel!',
                     color: 'error',
                 }),
             ],
-            flags: MessageFlags.Ephemeral,
+        });
+    }
+
+    // Check if bot is in the same voice channel as user
+    if (botVoiceChannel.id !== voiceChannel.id) {
+        return InteractionHelper.safeEditReply(interaction, {
+            embeds: [
+                createEmbed({
+                    title: '❌ Wrong Voice Channel',
+                    description: `I'm already in **${botVoiceChannel.name}**. Please join that channel first!`,
+                    color: 'error',
+                }),
+            ],
         });
     }
 
     const query = interaction.options.getString('query', true);
 
-    if (!MusicService.isActive(interaction.guildId)) {
-        try {
-            await MusicService.join(voiceChannel);
-        } catch (error) {
-            return InteractionHelper.safeEditReply(interaction, {
-                embeds: [
-                    createEmbed({
-                        title: '❌ Connection Failed',
-                        description: `Could not connect to ${voiceChannel.name}. Please try again.`,
-                        color: 'error',
-                    }),
-                ],
-                flags: MessageFlags.Ephemeral,
-            });
-        }
-    }
-
-    const queue = MusicService._getQueue(interaction.guildId);
-    queue._clearInactivityTimeout();
-    queue._isLoading = true;
-
+    // Send searching message
     await InteractionHelper.safeEditReply(interaction, {
         embeds: [
             createEmbed({
@@ -195,8 +258,12 @@ async function handlePlay(interaction) {
                 color: 'primary',
             }),
         ],
-        flags: MessageFlags.Ephemeral,
     });
+
+    // Get queue and prevent timeout during search
+    const queue = MusicService._getQueue(interaction.guildId);
+    queue._clearInactivityTimeout();
+    queue._isLoading = true;
 
     const track = await MusicService.search(query);
     
@@ -212,7 +279,6 @@ async function handlePlay(interaction) {
                     color: 'error',
                 }),
             ],
-            flags: MessageFlags.Ephemeral,
         });
     }
 
@@ -238,9 +304,9 @@ async function handlePlay(interaction) {
 
     await InteractionHelper.safeEditReply(interaction, {
         embeds: [embed],
-        flags: MessageFlags.Ephemeral,
     });
 
+    // Send public announcement
     await interaction.followUp({
         embeds: [
             createEmbed({
@@ -252,6 +318,8 @@ async function handlePlay(interaction) {
     });
 }
 
+// ─── STOP COMMAND ─────────────────────────────────────────────────────────
+
 async function handleStop(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
         return InteractionHelper.safeEditReply(interaction, {
@@ -262,7 +330,6 @@ async function handleStop(interaction) {
                     color: 'error',
                 }),
             ],
-            flags: MessageFlags.Ephemeral,
         });
     }
 
@@ -277,13 +344,11 @@ async function handleStop(interaction) {
                     color: 'warning',
                 }),
             ],
-            flags: MessageFlags.Ephemeral,
         });
     }
 
     await InteractionHelper.safeEditReply(interaction, {
         embeds: [successEmbed('⏹ Music stopped and queue cleared.', '✅ Stopped')],
-        flags: MessageFlags.Ephemeral,
     });
 
     await interaction.followUp({
@@ -297,6 +362,8 @@ async function handleStop(interaction) {
     });
 }
 
+// ─── ADMIN COMMAND ─────────────────────────────────────────────────────────
+
 async function handleAdmin(interaction) {
     if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
         return InteractionHelper.safeEditReply(interaction, {
@@ -307,7 +374,6 @@ async function handleAdmin(interaction) {
                     color: 'error',
                 }),
             ],
-            flags: MessageFlags.Ephemeral,
         });
     }
 
@@ -316,7 +382,6 @@ async function handleAdmin(interaction) {
     await InteractionHelper.safeEditReply(interaction, {
         embeds: [embed],
         components,
-        flags: MessageFlags.Ephemeral,
     });
 }
 
