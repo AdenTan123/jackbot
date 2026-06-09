@@ -27,6 +27,14 @@ export default {
       const baseUrl = interaction.fields.getTextInputValue('marizma_base_url')?.trim();
       const rolesRaw = interaction.fields.getTextInputValue('marizma_allowed_roles')?.trim();
 
+      // Temporary debug: log submission metadata but never log full API key
+      try {
+        const masked = apiKey ? (String(apiKey).length > 6 ? `${String(apiKey).slice(0,3)}...${String(apiKey).slice(-3)}` : '***') : null;
+        logger.info('marizma_setup_modal submitted', { guildId: interaction.guildId, userId: interaction.user.id, apiKeyMasked: masked, baseUrl: baseUrl || null, rolesProvided: Boolean(rolesRaw) });
+      } catch (logErr) {
+        // ignore logging errors
+      }
+
       if (!apiKey) {
         await InteractionHelper.safeReply(interaction, { embeds: [errorEmbed('Invalid', 'API key cannot be empty.')], flags: 1 << 6 });
         return;
@@ -50,6 +58,11 @@ export default {
       };
 
       await updateGuildConfig(interaction.client, interaction.guildId, cfg, { userId: interaction.user.id, command: 'setupmodal' });
+
+      try {
+        const masked = apiKey ? (String(apiKey).length > 6 ? `${String(apiKey).slice(0,3)}...${String(apiKey).slice(-3)}` : '***') : null;
+        logger.info('Saved Marizma configuration for guild', { guildId: interaction.guildId, userId: interaction.user.id, apiKeyMasked: masked, baseUrl: cfg.marizma.baseUrl, allowedRoleIds: cfg.marizma.allowedRoleIds.length });
+      } catch (logErr) {}
 
       await InteractionHelper.safeReply(interaction, { embeds: [successEmbed('Marizma configured for this server.')], flags: 1 << 6 });
     } catch (error) {

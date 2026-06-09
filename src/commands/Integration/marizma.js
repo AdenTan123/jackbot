@@ -35,6 +35,14 @@ export default {
         if (guildCfg.marizma.baseUrl) overrides.baseUrl = guildCfg.marizma.baseUrl;
       }
 
+      // Temporary debug logging: record invocation context but never log full API keys
+      try {
+        const masked = overrides.apiKey ? (String(overrides.apiKey).length > 6 ? `${String(overrides.apiKey).slice(0,3)}...${String(overrides.apiKey).slice(-3)}` : '***') : null;
+        logger.debug('Marizma command invoked', { sub, guildId: interaction.guildId, userId: interaction.user.id, overrides: { apiKey: masked, baseUrl: overrides.baseUrl } });
+      } catch (logErr) {
+        // swallow logging errors
+      }
+
       // require either environment key or guild-specific key
       if (!process.env.MARIZMA_API_KEY && !overrides.apiKey) {
         return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Marizma API key not configured. Set MARIZMA_API_KEY in environment or run /setup to configure for this server.') ] });
@@ -43,6 +51,7 @@ export default {
       switch (sub) {
         case 'server': {
           const res = await api.getServer(overrides);
+          logger.debug('Marizma.getServer response', { guildId: interaction.guildId, success: Boolean(res && res.success), error: res?.error });
           if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Failed to fetch server info', res?.error || null)] });
           const d = res.data || {};
           const embed = createEmbed({ title: `Server: ${d.ServerName || 'Unknown'}`, description: d.ServerDescription || 'No description', fields: [ { name: 'Players', value: String(d.PlayerCount || 0), inline: true }, { name: 'Max Players', value: String(d.MaxPlayers || 0), inline: true } ] });
@@ -50,6 +59,7 @@ export default {
         }
         case 'players': {
           const res = await api.getPlayers(overrides);
+          logger.debug('Marizma.getPlayers response', { guildId: interaction.guildId, count: res?.data?.Players?.length || 0, success: Boolean(res && res.success), error: res?.error });
           if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Failed to fetch players', res?.error || null)] });
           const players = (res.data?.Players || []).slice(0, 50).map(p => `${p.Name || p}`);
           const embed = createEmbed({ title: `Players (${players.length})`, description: players.length ? players.join('\n') : 'No players' });
@@ -57,12 +67,14 @@ export default {
         }
         case 'queue': {
           const res = await api.getQueue(overrides);
+          logger.debug('Marizma.getQueue response', { guildId: interaction.guildId, queueSize: res?.data?.Queue?.length || 0, success: Boolean(res && res.success), error: res?.error });
           if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Failed to fetch queue', res?.error || null)] });
           const q = (res.data?.Queue || []).map(String);
           return await InteractionHelper.safeEditReply(interaction, { embeds: [createEmbed({ title: `Queue (${q.length})`, description: q.length ? q.join('\n') : 'No queue' })] });
         }
         case 'bans': {
           const res = await api.getBans(overrides);
+          logger.debug('Marizma.getBans response', { guildId: interaction.guildId, bans: res?.data?.Bans?.length || 0, success: Boolean(res && res.success), error: res?.error });
           if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Failed to fetch bans', res?.error || null)] });
           const bans = (res.data?.Bans || []).map(String);
           return await InteractionHelper.safeEditReply(interaction, { embeds: [createEmbed({ title: `Bans (${bans.length})`, description: bans.length ? bans.join('\n') : 'No bans' })] });
@@ -70,6 +82,7 @@ export default {
         case 'announce': {
           const message = interaction.options.getString('message', true);
           const res = await api.announce(message, overrides);
+          logger.debug('Marizma.announce response', { guildId: interaction.guildId, success: Boolean(res && res.success), error: res?.error });
           if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Announce failed', res?.error || null)] });
           return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Announcement sent')] });
         }
@@ -79,25 +92,29 @@ export default {
             // attempt to set banner and hide from list before shutdown
             try {
               const bres = await api.setBanner(bannerText, overrides);
+              logger.debug('Marizma.setBanner response (shutdown)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
               // ignore bres success check - best effort
             } catch (e) {
               logger.warn('Failed to set banner before shutdown:', e?.message || e);
             }
 
             try {
-              await api.setSetting({ HideFromList: true }, overrides);
+              const sres = await api.setSetting({ HideFromList: true }, overrides);
+              logger.debug('Marizma.setSetting response (shutdown)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
             } catch (e) {
               logger.warn('Failed to set HideFromList before shutdown:', e?.message || e);
             }
 
             const res = await api.shutdown(overrides);
+            logger.debug('Marizma.shutdown response', { guildId: interaction.guildId, success: Boolean(res && res.success), error: res?.error });
             if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Shutdown failed', res?.error || null)] });
             return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Server shutdown initiated (30s)')] });
           }
           case 'startup': {
             // perform setsetting hidefromlist:True (user requested)
             try {
-              await api.setSetting({ HideFromList: true }, overrides);
+              const sres = await api.setSetting({ HideFromList: true }, overrides);
+              logger.debug('Marizma.setSetting response (startup)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
             } catch (e) {
               logger.warn('Failed to set HideFromList on startup:', e?.message || e);
             }
