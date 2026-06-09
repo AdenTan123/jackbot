@@ -137,7 +137,7 @@ class GuildQueue {
         this.startedAt = null;
         this._inactivityTimeout = null;
         this._isDestroying = false;
-        this._isLoading = false;
+        this._isLoading = false; // CRITICAL: Prevents timeout during loading
         this._setupPlayer();
     }
 
@@ -166,6 +166,7 @@ class GuildQueue {
     _startInactivityTimer() {
         this._clearInactivityTimeout();
         this._inactivityTimeout = setTimeout(() => {
+            // Don't destroy if we're loading a track
             if (!this._isLoading && 
                 this.player?.state.status === AudioPlayerStatus.Idle && 
                 this.tracks.length === 0 &&
@@ -173,7 +174,7 @@ class GuildQueue {
                 logger.info(`[MusicService] Inactivity timeout for guild ${this.guildId}, disconnecting...`);
                 this.destroy();
             }
-        }, 60_000); // Increased to 60 seconds to allow for loading
+        }, 60_000); // Increased to 60 seconds
     }
 
     async _playNext() {
@@ -189,7 +190,7 @@ class GuildQueue {
         const track = this.tracks.shift();
         this.currentTrack = track;
         this.startedAt = Date.now();
-        this._isLoading = true;
+        this._isLoading = true; // Set loading flag
 
         try {
             logger.info(`[MusicService] Loading track: "${track.title}" for guild ${this.guildId}`);
@@ -199,12 +200,13 @@ class GuildQueue {
                 throw new Error('Invalid audio resource created');
             }
             
-            this._isLoading = false;
+            this._isLoading = false; // Clear loading flag
             logger.info(`[MusicService] Playing track: "${track.title}" for guild ${this.guildId}`);
             this.player.play(resource);
         } catch (error) {
-            this._isLoading = false;
+            this._isLoading = false; // Clear loading flag on error
             logger.error(`[MusicService] Failed to stream track "${track.title}":`, error);
+            // Skip broken track and continue
             this._playNext();
         }
     }
@@ -320,6 +322,8 @@ export const MusicService = {
             channelId: channel.id,
             guildId: channel.guild.id,
             adapterCreator: channel.guild.voiceAdapterCreator,
+            selfDeaf: true, // Helps with connection stability
+            selfMute: false,
         });
 
         try {
@@ -355,8 +359,10 @@ export const MusicService = {
         const queue = this._getQueue(guildId);
         queue.tracks.push(track);
         
+        // Clear inactivity timeout since we have tracks now
         queue._clearInactivityTimeout();
 
+        // Only play if idle AND not loading
         if (queue.player.state.status === AudioPlayerStatus.Idle && 
             !queue.currentTrack && 
             !queue._isLoading) {
