@@ -60,6 +60,9 @@ function getYtDlpPath() {
 }
 
 function createYtDlpAudioStream(url) {
+    const startTime = Date.now();
+    logger.info(`[MusicService] Starting yt-dlp process for: ${url}`);
+    
     const child = spawn(getYtDlpPath(), [
         '--ignore-config',
         '--no-playlist',
@@ -84,6 +87,7 @@ function createYtDlpAudioStream(url) {
     });
 
     child.on('error', (error) => {
+        logger.error(`[MusicService] yt-dlp error:`, error);
         child.stdout.destroy(
             new Error(`Could not start yt-dlp. Run npm install or set YTDLP_PATH. ${error.message}`),
         );
@@ -91,6 +95,8 @@ function createYtDlpAudioStream(url) {
 
     child.on('close', (code) => {
         closed = true;
+        const duration = Date.now() - startTime;
+        logger.info(`[MusicService] yt-dlp process finished in ${duration}ms with code ${code}`);
         if (code !== 0 && !child.stdout.destroyed) {
             const details = stderr.trim() || `yt-dlp exited with code ${code}`;
             child.stdout.destroy(new Error(details));
@@ -137,7 +143,8 @@ class GuildQueue {
         this.startedAt = null;
         this._inactivityTimeout = null;
         this._isDestroying = false;
-        this._isLoading = false; // CRITICAL: Prevents timeout during loading
+        this._isLoading = false;
+        this._keepAliveInterval = null;
         this._setupPlayer();
     }
 
@@ -166,7 +173,6 @@ class GuildQueue {
     _startInactivityTimer() {
         this._clearInactivityTimeout();
         this._inactivityTimeout = setTimeout(() => {
-            // Don't destroy if we're loading a track
             if (!this._isLoading && 
                 this.player?.state.status === AudioPlayerStatus.Idle && 
                 this.tracks.length === 0 &&
@@ -174,7 +180,7 @@ class GuildQueue {
                 logger.info(`[MusicService] Inactivity timeout for guild ${this.guildId}, disconnecting...`);
                 this.destroy();
             }
-        }, 60_000); // Increased to 60 seconds
+        }, 180000);
     }
 
     async _playNext() {
@@ -190,7 +196,14 @@ class GuildQueue {
         const track = this.tracks.shift();
         this.currentTrack = track;
         this.startedAt = Date.now();
-        this._isLoading = true; // Set loading flag
+        this._isLoading = true;
+
+        this._keepAliveInterval = setInterval(() => {
+            if (this._isLoading) {
+                this._clearInactivityTimeout();
+                logger.debug(`[MusicService] Still loading "${track.title}", keeping connection alive...`);
+            }
+        }, 10000);
 
         try {
             logger.info(`[MusicService] Loading track: "${track.title}" for guild ${this.guildId}`);
@@ -200,13 +213,22 @@ class GuildQueue {
                 throw new Error('Invalid audio resource created');
             }
             
-            this._isLoading = false; // Clear loading flag
+            this._isLoading = false;
+            if (this._keepAliveInterval) {
+                clearInterval(this._keepAliveInterval);
+                this._keepAliveInterval = null;
+            }
+            
             logger.info(`[MusicService] Playing track: "${track.title}" for guild ${this.guildId}`);
             this.player.play(resource);
         } catch (error) {
-            this._isLoading = false; // Clear loading flag on error
+            this._isLoading = false;
+            if (this._keepAliveInterval) {
+                clearInterval(this._keepAliveInterval);
+                this._keepAliveInterval = null;
+            }
+            
             logger.error(`[MusicService] Failed to stream track "${track.title}":`, error);
-            // Skip broken track and continue
             this._playNext();
         }
     }
@@ -214,6 +236,11 @@ class GuildQueue {
     destroy() {
         if (this._isDestroying) return;
         this._isDestroying = true;
+        
+        if (this._keepAliveInterval) {
+            clearInterval(this._keepAliveInterval);
+            this._keepAliveInterval = null;
+        }
         
         this._clearInactivityTimeout();
         
@@ -231,11 +258,6 @@ class GuildQueue {
 // ─── Public API ─────────────────────────────────────────────────────────────
 
 export const MusicService = {
-    /**
-     * Get or create the queue for a guild.
-     * @param {string} guildId
-     * @returns {GuildQueue}
-     */
     _getQueue(guildId) {
         if (!queues.has(guildId)) {
             queues.set(guildId, new GuildQueue(guildId));
@@ -243,11 +265,6 @@ export const MusicService = {
         return queues.get(guildId);
     },
 
-    /**
-     * Search for a track and return its info.
-     * @param {string} query
-     * @returns {Promise<Track|null>}
-     */
     async search(query) {
         try {
             let videoInfo;
@@ -298,11 +315,6 @@ export const MusicService = {
         }
     },
 
-    /**
-     * Join a voice channel and connect to the queue.
-     * @param {import('discord.js').VoiceBasedChannel} channel
-     * @returns {Promise<GuildQueue>}
-     */
     async join(channel) {
         if (!channel.joinable) {
             throw new Error('Cannot join voice channel - missing permissions');
@@ -322,12 +334,12 @@ export const MusicService = {
             channelId: channel.id,
             guildId: channel.guild.id,
             adapterCreator: channel.guild.voiceAdapterCreator,
-            selfDeaf: true, // Helps with connection stability
+            selfDeaf: true,
             selfMute: false,
         });
 
         try {
-            await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
+            await entersState(connection, VoiceConnectionStatus.Ready, 30000);
         } catch (error) {
             connection.destroy();
             throw new Error('Could not connect to the voice channel in time.');
@@ -339,8 +351,8 @@ export const MusicService = {
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
             try {
                 await Promise.race([
-                    entersState(connection, VoiceConnectionStatus.Signalling, 5_000),
-                    entersState(connection, VoiceConnectionStatus.Connecting, 5_000),
+                    entersState(connection, VoiceConnectionStatus.Signalling, 5000),
+                    entersState(connection, VoiceConnectionStatus.Connecting, 5000),
                 ]);
             } catch {
                 queue.destroy();
@@ -350,19 +362,12 @@ export const MusicService = {
         return queue;
     },
 
-    /**
-     * Add a track to the queue and start playback if idle.
-     * @param {string} guildId
-     * @param {Track} track
-     */
     async addTrack(guildId, track) {
         const queue = this._getQueue(guildId);
         queue.tracks.push(track);
         
-        // Clear inactivity timeout since we have tracks now
         queue._clearInactivityTimeout();
 
-        // Only play if idle AND not loading
         if (queue.player.state.status === AudioPlayerStatus.Idle && 
             !queue.currentTrack && 
             !queue._isLoading) {
@@ -370,7 +375,6 @@ export const MusicService = {
         }
     },
 
-    /** @param {string} guildId */
     stop(guildId) {
         const queue = queues.get(guildId);
         if (!queue) return false;
@@ -380,7 +384,6 @@ export const MusicService = {
         return true;
     },
 
-    /** @param {string} guildId */
     skip(guildId) {
         const queue = queues.get(guildId);
         if (!queue || !queue.currentTrack) return false;
@@ -390,7 +393,6 @@ export const MusicService = {
         return true;
     },
 
-    /** @param {string} guildId */
     pause(guildId) {
         const queue = queues.get(guildId);
         if (!queue) return false;
@@ -404,7 +406,6 @@ export const MusicService = {
         }
     },
 
-    /** @param {string} guildId */
     resume(guildId) {
         const queue = queues.get(guildId);
         if (!queue) return false;
@@ -418,10 +419,6 @@ export const MusicService = {
         }
     },
 
-    /**
-     * @param {string} guildId
-     * @param {number} vol  - 0.0 to 2.0
-     */
     setVolume(guildId, vol) {
         const clampedVol = Math.max(0, Math.min(2.0, vol));
         
@@ -438,7 +435,6 @@ export const MusicService = {
         return true;
     },
 
-    /** @param {string} guildId */
     shuffle(guildId) {
         const queue = queues.get(guildId);
         if (!queue || queue.tracks.length < 2) return false;
@@ -450,12 +446,6 @@ export const MusicService = {
         return true;
     },
 
-    /**
-     * Remove a track from the queue by index
-     * @param {string} guildId
-     * @param {number} index
-     * @returns {boolean}
-     */
     removeTrack(guildId, index) {
         const queue = queues.get(guildId);
         if (!queue || index < 0 || index >= queue.tracks.length) return false;
@@ -464,12 +454,6 @@ export const MusicService = {
         return true;
     },
 
-    /**
-     * Get current queue position for a track
-     * @param {string} guildId
-     * @param {string} trackUrl
-     * @returns {number}
-     */
     getTrackPosition(guildId, trackUrl) {
         const queue = queues.get(guildId);
         if (!queue) return -1;
@@ -477,10 +461,6 @@ export const MusicService = {
         return queue.tracks.findIndex(track => track.url === trackUrl);
     },
 
-    /**
-     * @param {string} guildId
-     * @returns {{ currentTrack: Track|null, tracks: Track[], volume: number, status: string, startedAt: number|null }}
-     */
     getState(guildId) {
         const queue = queues.get(guildId);
         if (!queue) return null;
@@ -494,24 +474,15 @@ export const MusicService = {
         };
     },
 
-    /** @param {string} guildId */
     isActive(guildId) {
         return queues.has(guildId);
     },
     
-    /**
-     * Get queue length
-     * @param {string} guildId
-     * @returns {number}
-     */
     getQueueLength(guildId) {
         const queue = queues.get(guildId);
         return queue ? queue.tracks.length : 0;
     },
     
-    /**
-     * Clear all queues (useful for shutdown)
-     */
     clearAllQueues() {
         for (const [guildId, queue] of queues) {
             queue.destroy();

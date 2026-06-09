@@ -133,7 +133,6 @@ export default {
                 } else if (btnInteraction.customId.startsWith('playlist_next_')) {
                     currentPage++;
                 }
-                // refresh keeps current page
 
                 const { embed: newEmbed, components: newComponents } = buildPlaylistEmbed(
                     interaction.guildId,

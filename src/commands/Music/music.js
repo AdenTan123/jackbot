@@ -1,10 +1,5 @@
 /**
  * /music — Main music command.
- *
- * Subcommands:
- *   play  <query>  – Search YouTube and add a track to the queue.
- *   stop           – Stop playback and disconnect (admin only).
- *   admin          – Admin control panel with interactive buttons.
  */
 
 import {
@@ -19,8 +14,6 @@ import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { logger } from '../../utils/logger.js';
 import { MusicService } from '../../services/musicService.js';
-
-// ─── Helpers ────────────────────────────────────────────────────────────────
 
 function buildAdminPanel(guildId) {
     const state = MusicService.getState(guildId);
@@ -84,8 +77,6 @@ function buildAdminPanel(guildId) {
     return { embed, components: [row1, row2] };
 }
 
-// ─── Command ────────────────────────────────────────────────────────────────
-
 export default {
     data: new SlashCommandBuilder()
         .setName('music')
@@ -142,8 +133,6 @@ export default {
     },
 };
 
-// ─── Subcommand Handlers ─────────────────────────────────────────────────────
-
 async function handlePlay(interaction) {
     const member = interaction.member;
     const voiceChannel = member?.voice?.channel;
@@ -161,7 +150,6 @@ async function handlePlay(interaction) {
         });
     }
 
-    // Check bot permissions
     const botMember = interaction.guild.members.me;
     if (!voiceChannel.permissionsFor(botMember).has(['Connect', 'Speak'])) {
         return InteractionHelper.safeEditReply(interaction, {
@@ -178,7 +166,6 @@ async function handlePlay(interaction) {
 
     const query = interaction.options.getString('query', true);
 
-    // Join voice channel FIRST to prevent timeout
     if (!MusicService.isActive(interaction.guildId)) {
         try {
             await MusicService.join(voiceChannel);
@@ -196,12 +183,10 @@ async function handlePlay(interaction) {
         }
     }
 
-    // Get queue and prevent timeout during search
     const queue = MusicService._getQueue(interaction.guildId);
     queue._clearInactivityTimeout();
     queue._isLoading = true;
 
-    // Send searching message
     await InteractionHelper.safeEditReply(interaction, {
         embeds: [
             createEmbed({
@@ -213,14 +198,11 @@ async function handlePlay(interaction) {
         flags: MessageFlags.Ephemeral,
     });
 
-    // Search for track
     const track = await MusicService.search(query);
     
-    // Clear loading state
     queue._isLoading = false;
 
     if (!track) {
-        // Start inactivity timer if no track found
         queue._startInactivityTimer();
         return InteractionHelper.safeEditReply(interaction, {
             embeds: [
@@ -259,7 +241,6 @@ async function handlePlay(interaction) {
         flags: MessageFlags.Ephemeral,
     });
 
-    // Send public announcement
     await interaction.followUp({
         embeds: [
             createEmbed({
@@ -339,5 +320,4 @@ async function handleAdmin(interaction) {
     });
 }
 
-// ─── Export helpers for button handler ──────────────────────────────────────
 export { buildAdminPanel };
