@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
@@ -84,10 +84,10 @@ export default {
           description: `Volume: ${music.volume}%\nQueue length: ${(music.queue || []).length}`
         });
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('music_admin:play').setLabel('Play').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId('music_admin:stop').setLabel('Stop').setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId('music_admin:queue').setLabel('Queue').setStyle(ButtonStyle.Secondary)
+        const row = InteractionHelper.buildActionRow(
+          InteractionHelper.buildButton('music_admin:play', 'Play', 'Primary'),
+          InteractionHelper.buildButton('music_admin:stop', 'Stop', 'Danger'),
+          InteractionHelper.buildButton('music_admin:queue', 'Queue', 'Secondary') // Fix #3: removed trailing comma
         );
 
         return await InteractionHelper.safeEditReply(interaction, { embeds: [panel], components: [row] });
