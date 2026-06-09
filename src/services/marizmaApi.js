@@ -17,9 +17,23 @@ client.interceptors.request.use(cfg => {
   return cfg;
 });
 
-async function request(method, path, data = undefined) {
+async function request(method, path, data = undefined, overrides = {}) {
   try {
-    const res = await client.request({ method, url: path, data });
+    const headers = { Accept: '*/*' };
+    if (overrides && overrides.apiKey) {
+      headers['X-Api-Key'] = overrides.apiKey;
+    } else if (API_KEY) {
+      headers['X-Api-Key'] = API_KEY;
+    }
+
+    if (overrides && overrides.baseUrl) {
+      const base = String(overrides.baseUrl).replace(/\/+$/, '');
+      const fullUrl = `${base}${path.startsWith('/') ? path : `/${path}`}`;
+      const res = await axios.request({ method, url: fullUrl, data, headers, timeout: 10000 });
+      return res.data;
+    }
+
+    const res = await client.request({ method, url: path, data, headers });
     return res.data;
   } catch (error) {
     logger.warn('Marizma API request failed', { method, path, message: error?.message });
@@ -28,16 +42,16 @@ async function request(method, path, data = undefined) {
   }
 }
 
-export const getServer = () => request('get', '/server');
-export const getPlayers = () => request('get', '/server/players');
-export const getQueue = () => request('get', '/server/queue');
-export const getBans = () => request('get', '/server/bans');
-export const announce = (message) => request('post', '/server/announce', { message });
-export const shutdown = () => request('post', '/server/shutdown');
-export const setSetting = (payload) => request('post', '/server/setSetting', payload);
-export const banPlayer = (userId, banned = true) => request('post', '/server/banplayer', { Banned: !!banned, UserId: Number(userId) });
-export const kickPlayer = (userId, reason = '') => request('post', '/server/moderation/kick', { UserId: Number(userId), ModerationReason: reason });
-export const setBanner = (banner) => request('post', '/server/setbanner', { banner });
+export const getServer = (overrides) => request('get', '/server', undefined, overrides);
+export const getPlayers = (overrides) => request('get', '/server/players', undefined, overrides);
+export const getQueue = (overrides) => request('get', '/server/queue', undefined, overrides);
+export const getBans = (overrides) => request('get', '/server/bans', undefined, overrides);
+export const announce = (message, overrides) => request('post', '/server/announce', { message }, overrides);
+export const shutdown = (overrides) => request('post', '/server/shutdown', undefined, overrides);
+export const setSetting = (payload, overrides) => request('post', '/server/setSetting', payload, overrides);
+export const banPlayer = (userId, banned = true, overrides) => request('post', '/server/banplayer', { Banned: !!banned, UserId: Number(userId) }, overrides);
+export const kickPlayer = (userId, reason = '', overrides) => request('post', '/server/moderation/kick', { UserId: Number(userId), ModerationReason: reason }, overrides);
+export const setBanner = (banner, overrides) => request('post', '/server/setbanner', { banner }, overrides);
 
 export default {
   getServer,
