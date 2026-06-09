@@ -147,6 +147,14 @@ export default {
             // get cohost and optional host
             const cohostUser = interaction.options.getUser('cohost');
             const hostUser = interaction.options.getUser('host') || interaction.user;
+            // attempt to set a welcoming banner for the session
+            try {
+              const bannerText = '✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assitance, This Sessison Is Being Hosted By Chloe, Thank You Lovely Rp!  ✙';
+              const bres = await api.setBanner(bannerText, overrides);
+              logger.debug('Marizma.setBanner response (startup)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
+            } catch (e) {
+              logger.warn('Failed to set banner on startup:', e?.message || e);
+            }
 
             // reply to the command with embed + link
             const joinLink = 'https://www.roblox.com/games/start?placeId=8704997000&launchData=%7B%22serverCode%22%3A%22f99%2D57a%22%7D';
