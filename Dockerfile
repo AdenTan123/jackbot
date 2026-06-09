@@ -7,8 +7,10 @@ WORKDIR /usr/src/app
 # A wildcard is used to ensure both package.json AND package-lock.json are copied
 COPY package*.json ./
 
-# Install only production dependencies
-RUN npm ci --omit=dev
+# Install build dependencies required for native modules, then install production dependencies
+RUN apk add --no-cache python3 make g++ opus-dev \
+  && npm ci --omit=dev \
+  && apk del python3 make g++
 
 # Bundle app source
 COPY . .
