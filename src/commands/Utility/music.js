@@ -3,6 +3,7 @@ import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
 import { logger } from '../../utils/logger.js';
+import MusicService from '../../services/musicService.js';
 
 export default {
   data: new SlashCommandBuilder()
@@ -35,6 +36,21 @@ export default {
         music.queue = music.queue || [];
         music.queue.push({ requester: interaction.user.id, query, addedAt: new Date().toISOString() });
         await updateGuildConfig(interaction.client, guildId, { music }).catch(() => {});
+
+        // If not already playing, try to join and start playback
+        try {
+          const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
+          if (guild) {
+            await MusicService.ensureConnection(guild, interaction.member).catch(() => null);
+            const started = await MusicService.playNext(guild, interaction.client).catch(() => null);
+            if (started) {
+              return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Playing', `Now playing: ${started.query}`)] });
+            }
+          }
+        } catch (e) {
+          logger.debug('Music start attempt failed', e?.message || e);
+        }
+
         return await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed('Queued', `Added **${query}** to the queue.`)]
         });
@@ -44,6 +60,7 @@ export default {
         music.queue = [];
         music.playing = false;
         await updateGuildConfig(interaction.client, guildId, { music }).catch(() => {});
+        try { MusicService.stop(guildId); } catch (e) {}
         return await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed('Stopped', 'Playback stopped and queue cleared.')]
         });
