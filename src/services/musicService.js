@@ -25,19 +25,28 @@ class MusicService {
 
   static async playNext(guild, client) {
     try {
-      const cfg = await getGuildConfig(client, guild.id).catch(() => ({}));
-      const music = cfg.music || { queue: [] };
-      const next = (music.queue || []).shift();
-      await updateGuildConfig(client, guild.id, { music }).catch(() => {});
+      // Fix: don't silently swallow config errors
+      const cfg = await getGuildConfig(client, guild.id).catch(err => {
+        logger.error('playNext: failed to load guild config', err);
+        return null;
+      });
+      if (!cfg) return null;
+
+      const music = cfg.music || { queue: [], volume: 100, playing: false };
+      const next = (music.queue || []).shift(); // mutates the local copy
+
+      // Fix: persist the dequeued state before attempting playback
+      await updateGuildConfig(client, guild.id, { music }).catch(err => {
+        logger.warn('playNext: failed to persist queue update', err);
+      });
+
       if (!next) {
-        // no track
         const conn = getVoiceConnection(guild.id);
         if (conn) conn.destroy();
         players.delete(guild.id);
         return null;
       }
 
-      // resolve query to a playable URL
       let streamInfo;
       if (/^https?:\/\//.test(next.query)) {
         logger.debug(`Attempting to stream URL: ${next.query}`);
@@ -56,18 +65,23 @@ class MusicService {
         }
         logger.debug(`Found result: ${results[0].title} (${results[0].url})`);
         streamInfo = await play.stream(results[0].url).catch(err => {
-          logger.error(`Failed to stream search result:`, err.message);
+          logger.error('Failed to stream search result:', err.message);
           return null;
         });
       }
 
       if (!streamInfo) throw new Error('Failed to create audio stream for ' + next.query);
 
-      logger.debug(`Creating audio resource with type: ${streamInfo.type}`);
       const resource = createAudioResource(streamInfo.stream, { inputType: streamInfo.type });
       const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
 
       player.play(resource);
+
+      // Fix: mark playing: true in config when playback starts
+      await updateGuildConfig(client, guild.id, {
+        music: { ...music, playing: true }
+      }).catch(err => logger.warn('playNext: failed to set playing state', err));
+
       logger.info(`Playing: ${next.query} (requester: ${next.requester})`);
 
       player.on('error', error => {
@@ -76,7 +90,6 @@ class MusicService {
 
       player.on(AudioPlayerStatus.Idle, () => {
         logger.debug('Track finished, playing next...');
-        // play next recursively
         setImmediate(() => MusicService.playNext(guild, client));
       });
 
@@ -85,6 +98,7 @@ class MusicService {
         logger.warn('No voice connection available, cannot subscribe player');
         return next;
       }
+
       conn.subscribe(player);
       players.set(guild.id, { player, current: next });
       logger.debug(`Player subscribed for guild ${guild.id}`);
