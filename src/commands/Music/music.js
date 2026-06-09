@@ -69,12 +69,12 @@ function buildAdminPanel(guildId) {
             .setCustomId('music_admin_vol_down')
             .setLabel('🔉 Vol -10%')
             .setStyle(ButtonStyle.Secondary)
-            .setDisabled(!hasQueue || state.volume <= 0),
+            .setDisabled(!hasQueue || (state && state.volume <= 0)),
         new ButtonBuilder()
             .setCustomId('music_admin_vol_up')
             .setLabel('🔊 Vol +10%')
             .setStyle(ButtonStyle.Secondary)
-            .setDisabled(!hasQueue || state.volume >= 2),
+            .setDisabled(!hasQueue || (state && state.volume >= 2)),
         new ButtonBuilder()
             .setCustomId('music_admin_refresh')
             .setLabel('🔄 Refresh')
@@ -90,7 +90,6 @@ export default {
     data: new SlashCommandBuilder()
         .setName('music')
         .setDescription('Music player commands')
-        // /music play
         .addSubcommand((sub) =>
             sub
                 .setName('play')
@@ -102,13 +101,11 @@ export default {
                         .setRequired(true),
                 ),
         )
-        // /music stop
         .addSubcommand((sub) =>
             sub
                 .setName('stop')
                 .setDescription('Stop playback and disconnect from the voice channel'),
         )
-        // /music admin
         .addSubcommand((sub) =>
             sub
                 .setName('admin')
@@ -166,7 +163,7 @@ async function handlePlay(interaction) {
 
     const query = interaction.options.getString('query', true);
 
-    // Search
+    // Send searching message
     await InteractionHelper.safeEditReply(interaction, {
         embeds: [
             createEmbed({
@@ -177,6 +174,11 @@ async function handlePlay(interaction) {
         ],
         flags: MessageFlags.Ephemeral,
     });
+
+    // Join voice channel first to prevent timeout
+    if (!MusicService.isActive(interaction.guildId)) {
+        await MusicService.join(voiceChannel);
+    }
 
     const track = await MusicService.search(query);
 
@@ -195,11 +197,6 @@ async function handlePlay(interaction) {
 
     track.requesterId = interaction.user.id;
     track.requesterTag = interaction.user.tag;
-
-    // Join if not already connected
-    if (!MusicService.isActive(interaction.guildId)) {
-        await MusicService.join(voiceChannel);
-    }
 
     const stateBefore = MusicService.getState(interaction.guildId);
     const isFirstTrack = !stateBefore?.currentTrack && stateBefore?.tracks.length === 0;
@@ -223,7 +220,7 @@ async function handlePlay(interaction) {
         flags: MessageFlags.Ephemeral,
     });
 
-    // Also send a non-ephemeral notice to the channel
+    // Send public announcement
     await interaction.followUp({
         embeds: [
             createEmbed({

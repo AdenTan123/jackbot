@@ -31,6 +31,13 @@ const downloadedYtDlpPath = path.resolve(
 /** @type {Map<string, GuildQueue>} */
 const queues = new Map();
 
+// Initialize play-dl
+try {
+    await playdl.getFreeClientID();
+} catch (error) {
+    logger.warn('[MusicService] Could not initialize play-dl client ID:', error);
+}
+
 function getVideoUrl(videoInfo) {
     if (videoInfo?.url) return videoInfo.url;
     if (videoInfo?.id) return `https://www.youtube.com/watch?v=${videoInfo.id}`;
@@ -44,17 +51,6 @@ function getThumbnailUrl(videoInfo) {
         videoInfo?.thumbnail ??
         null
     );
-}
-
-async function createTrackResource(url, volume) {
-    const audioStream = createYtDlpAudioStream(url);
-    const { stream, type } = await demuxProbe(audioStream);
-    const resource = createAudioResource(stream, {
-        inputType: type,
-        inlineVolume: true,
-    });
-    resource.volume?.setVolume(volume);
-    return resource;
 }
 
 function getYtDlpPath() {
@@ -108,6 +104,17 @@ function createYtDlpAudioStream(url) {
     return child.stdout;
 }
 
+async function createTrackResource(url, volume) {
+    const audioStream = createYtDlpAudioStream(url);
+    const { stream, type } = await demuxProbe(audioStream);
+    const resource = createAudioResource(stream, {
+        inputType: type,
+        inlineVolume: true,
+    });
+    resource.volume?.setVolume(volume);
+    return resource;
+}
+
 /**
  * @typedef {Object} Track
  * @property {string} title
@@ -127,7 +134,10 @@ class GuildQueue {
         this.connection = null;
         this.player = null;
         this.volume = 0.5;
-        this.startedAt = null;  // Date when current track started
+        this.startedAt = null;
+        this._inactivityTimeout = null;
+        this._isDestroying = false;
+        this._isLoading = false;
         this._setupPlayer();
     }
 
@@ -146,37 +156,72 @@ class GuildQueue {
         });
     }
 
+    _clearInactivityTimeout() {
+        if (this._inactivityTimeout) {
+            clearTimeout(this._inactivityTimeout);
+            this._inactivityTimeout = null;
+        }
+    }
+
+    _startInactivityTimer() {
+        this._clearInactivityTimeout();
+        this._inactivityTimeout = setTimeout(() => {
+            if (!this._isLoading && 
+                this.player?.state.status === AudioPlayerStatus.Idle && 
+                this.tracks.length === 0 &&
+                !this.currentTrack) {
+                logger.info(`[MusicService] Inactivity timeout for guild ${this.guildId}, disconnecting...`);
+                this.destroy();
+            }
+        }, 60_000); // Increased to 60 seconds to allow for loading
+    }
+
     async _playNext() {
+        this._clearInactivityTimeout();
+
         if (this.tracks.length === 0) {
             this.currentTrack = null;
             this.startedAt = null;
-            // Disconnect after 30s of inactivity
-            setTimeout(() => {
-                if (this.player.state.status === AudioPlayerStatus.Idle) {
-                    this.destroy();
-                }
-            }, 30_000);
+            this._startInactivityTimer();
             return;
         }
 
         const track = this.tracks.shift();
         this.currentTrack = track;
         this.startedAt = Date.now();
+        this._isLoading = true;
 
         try {
+            logger.info(`[MusicService] Loading track: "${track.title}" for guild ${this.guildId}`);
             const resource = await createTrackResource(track.url, this.volume);
+            
+            if (!resource || !resource.playable) {
+                throw new Error('Invalid audio resource created');
+            }
+            
+            this._isLoading = false;
+            logger.info(`[MusicService] Playing track: "${track.title}" for guild ${this.guildId}`);
             this.player.play(resource);
         } catch (error) {
+            this._isLoading = false;
             logger.error(`[MusicService] Failed to stream track "${track.title}":`, error);
-            this._playNext(); // skip broken track
+            this._playNext();
         }
     }
 
     destroy() {
+        if (this._isDestroying) return;
+        this._isDestroying = true;
+        
+        this._clearInactivityTimeout();
+        
         try {
             this.player?.stop(true);
             this.connection?.destroy();
-        } catch (_) {}
+        } catch (error) {
+            logger.error(`[MusicService] Error destroying queue for guild ${this.guildId}:`, error);
+        }
+        
         queues.delete(this.guildId);
     }
 }
@@ -204,9 +249,13 @@ export const MusicService = {
     async search(query) {
         try {
             let videoInfo;
-            // If it looks like a URL, stream it directly
+            
             if (/^https?:\/\//i.test(query)) {
                 const info = await playdl.video_info(query);
+                if (!info || !info.video_details) {
+                    logger.warn('[MusicService] No video details found for URL:', query);
+                    return null;
+                }
                 videoInfo = info.video_details;
             } else {
                 const results = await playdl.search(query, {
@@ -221,13 +270,22 @@ export const MusicService = {
             if (!url) return null;
 
             const durationSecs = videoInfo.durationInSec ?? 0;
-            const mins = Math.floor(durationSecs / 60);
-            const secs = String(durationSecs % 60).padStart(2, '0');
+            
+            let duration;
+            if (durationSecs === 0) {
+                duration = 'Live';
+            } else if (durationSecs < 60) {
+                duration = `0:${String(durationSecs).padStart(2, '0')}`;
+            } else {
+                const mins = Math.floor(durationSecs / 60);
+                const secs = String(durationSecs % 60).padStart(2, '0');
+                duration = `${mins}:${secs}`;
+            }
 
             return {
                 title: videoInfo.title ?? 'Unknown Title',
                 url,
-                duration: durationSecs > 0 ? `${mins}:${secs}` : 'Live',
+                duration,
                 thumbnail: getThumbnailUrl(videoInfo),
                 requesterId: null,
                 requesterTag: null,
@@ -241,10 +299,22 @@ export const MusicService = {
     /**
      * Join a voice channel and connect to the queue.
      * @param {import('discord.js').VoiceBasedChannel} channel
-     * @returns {GuildQueue}
+     * @returns {Promise<GuildQueue>}
      */
     async join(channel) {
+        if (!channel.joinable) {
+            throw new Error('Cannot join voice channel - missing permissions');
+        }
+        
+        if (!channel.speakable) {
+            throw new Error('Cannot speak in voice channel - missing permissions');
+        }
+
         const queue = this._getQueue(channel.guild.id);
+
+        if (queue.connection && queue.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+            return queue;
+        }
 
         const connection = joinVoiceChannel({
             channelId: channel.id,
@@ -254,7 +324,7 @@ export const MusicService = {
 
         try {
             await entersState(connection, VoiceConnectionStatus.Ready, 30_000);
-        } catch {
+        } catch (error) {
             connection.destroy();
             throw new Error('Could not connect to the voice channel in time.');
         }
@@ -284,8 +354,12 @@ export const MusicService = {
     async addTrack(guildId, track) {
         const queue = this._getQueue(guildId);
         queue.tracks.push(track);
+        
+        queue._clearInactivityTimeout();
 
-        if (queue.player.state.status === AudioPlayerStatus.Idle && !queue.currentTrack) {
+        if (queue.player.state.status === AudioPlayerStatus.Idle && 
+            !queue.currentTrack && 
+            !queue._isLoading) {
             await queue._playNext();
         }
     },
@@ -295,6 +369,7 @@ export const MusicService = {
         const queue = queues.get(guildId);
         if (!queue) return false;
         queue.tracks = [];
+        queue._clearInactivityTimeout();
         queue.destroy();
         return true;
     },
@@ -303,7 +378,9 @@ export const MusicService = {
     skip(guildId) {
         const queue = queues.get(guildId);
         if (!queue || !queue.currentTrack) return false;
-        queue.player.stop(); // triggers Idle → _playNext
+        
+        queue.startedAt = null;
+        queue.player.stop();
         return true;
     },
 
@@ -311,14 +388,28 @@ export const MusicService = {
     pause(guildId) {
         const queue = queues.get(guildId);
         if (!queue) return false;
-        return queue.player.pause();
+        
+        try {
+            queue.player.pause();
+            return true;
+        } catch (error) {
+            logger.error(`[MusicService] Error pausing in guild ${guildId}:`, error);
+            return false;
+        }
     },
 
     /** @param {string} guildId */
     resume(guildId) {
         const queue = queues.get(guildId);
         if (!queue) return false;
-        return queue.player.unpause();
+        
+        try {
+            queue.player.unpause();
+            return true;
+        } catch (error) {
+            logger.error(`[MusicService] Error resuming in guild ${guildId}:`, error);
+            return false;
+        }
     },
 
     /**
@@ -326,11 +417,18 @@ export const MusicService = {
      * @param {number} vol  - 0.0 to 2.0
      */
     setVolume(guildId, vol) {
+        const clampedVol = Math.max(0, Math.min(2.0, vol));
+        
         const queue = queues.get(guildId);
         if (!queue) return false;
-        queue.volume = vol;
-        const resource = queue.player.state?.resource;
-        resource?.volume?.setVolume(vol);
+        
+        queue.volume = clampedVol;
+        
+        const resource = queue.player?.state?.resource;
+        if (resource?.volume) {
+            resource.volume.setVolume(clampedVol);
+        }
+        
         return true;
     },
 
@@ -338,11 +436,39 @@ export const MusicService = {
     shuffle(guildId) {
         const queue = queues.get(guildId);
         if (!queue || queue.tracks.length < 2) return false;
+        
         for (let i = queue.tracks.length - 1; i > 0; i--) {
             const j = Math.floor(Math.random() * (i + 1));
             [queue.tracks[i], queue.tracks[j]] = [queue.tracks[j], queue.tracks[i]];
         }
         return true;
+    },
+
+    /**
+     * Remove a track from the queue by index
+     * @param {string} guildId
+     * @param {number} index
+     * @returns {boolean}
+     */
+    removeTrack(guildId, index) {
+        const queue = queues.get(guildId);
+        if (!queue || index < 0 || index >= queue.tracks.length) return false;
+        
+        queue.tracks.splice(index, 1);
+        return true;
+    },
+
+    /**
+     * Get current queue position for a track
+     * @param {string} guildId
+     * @param {string} trackUrl
+     * @returns {number}
+     */
+    getTrackPosition(guildId, trackUrl) {
+        const queue = queues.get(guildId);
+        if (!queue) return -1;
+        
+        return queue.tracks.findIndex(track => track.url === trackUrl);
     },
 
     /**
@@ -352,11 +478,12 @@ export const MusicService = {
     getState(guildId) {
         const queue = queues.get(guildId);
         if (!queue) return null;
+        
         return {
             currentTrack: queue.currentTrack,
             tracks: [...queue.tracks],
             volume: queue.volume,
-            status: queue.player.state.status,
+            status: queue.player?.state?.status ?? AudioPlayerStatus.Idle,
             startedAt: queue.startedAt,
         };
     },
@@ -365,4 +492,24 @@ export const MusicService = {
     isActive(guildId) {
         return queues.has(guildId);
     },
+    
+    /**
+     * Get queue length
+     * @param {string} guildId
+     * @returns {number}
+     */
+    getQueueLength(guildId) {
+        const queue = queues.get(guildId);
+        return queue ? queue.tracks.length : 0;
+    },
+    
+    /**
+     * Clear all queues (useful for shutdown)
+     */
+    clearAllQueues() {
+        for (const [guildId, queue] of queues) {
+            queue.destroy();
+        }
+        queues.clear();
+    }
 };
