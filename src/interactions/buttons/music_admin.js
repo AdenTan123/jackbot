@@ -12,20 +12,24 @@ export default {
       const music = cfg.music || { queue: [], volume: 100, playing: false };
 
       if (action === 'play') {
-        // Start playback stub: pop next and announce
-        const next = (music.queue || []).shift();
-        if (!next) {
-          return interaction.reply({ embeds: [infoEmbed('Queue Empty', 'There are no tracks queued.')], ephemeral: true });
+        try {
+          const guild = await client.guilds.fetch(guildId).catch(() => null);
+          if (!guild) return interaction.reply({ embeds: [errorEmbed('Error', 'Guild not accessible')], ephemeral: true });
+          await MusicService.ensureConnection(guild, interaction.member).catch(() => null);
+          const started = await MusicService.playNext(guild, client).catch(() => null);
+          if (!started) return interaction.reply({ embeds: [infoEmbed('Queue Empty', 'There are no tracks queued.')], ephemeral: true });
+          return interaction.reply({ embeds: [successEmbed('Now Playing', `${started.query} — requested by <@${started.requester}>`)], ephemeral: true });
+        } catch (e) {
+          logger.error('music_admin play error', e);
+          return interaction.reply({ embeds: [errorEmbed('Error', 'Failed to start playback')], ephemeral: true });
         }
-        music.playing = true;
-        await updateGuildConfig(client, guildId, { music }).catch(() => {});
-        return interaction.reply({ embeds: [successEmbed('Now Playing', `${next.query} — requested by <@${next.requester}>`)], ephemeral: true });
       }
 
       if (action === 'stop') {
         music.queue = [];
         music.playing = false;
         await updateGuildConfig(client, guildId, { music }).catch(() => {});
+        try { MusicService.stop(guildId); } catch(e){}
         return interaction.reply({ embeds: [successEmbed('Stopped', 'Playback stopped and queue cleared.')], ephemeral: true });
       }
 
