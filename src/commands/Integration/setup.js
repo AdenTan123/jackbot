@@ -9,7 +9,7 @@ const DEFAULT_BASE = process.env.MARIZMA_BASE_URL || 'https://maple-api.marizma.
 export default {
   data: new SlashCommandBuilder()
     .setName('setup')
-    .setDescription('Configure Marizma API integration for this server (opens secure modal)')
+    .setDescription('Configure Marizma API integration for this server.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 
   async execute(interaction) {
