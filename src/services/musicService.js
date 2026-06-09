@@ -40,32 +40,54 @@ class MusicService {
       // resolve query to a playable URL
       let streamInfo;
       if (/^https?:\/\//.test(next.query)) {
-        streamInfo = await play.stream(next.query).catch(() => null);
+        logger.debug(`Attempting to stream URL: ${next.query}`);
+        streamInfo = await play.stream(next.query).catch(err => {
+          logger.error(`Failed to stream URL ${next.query}:`, err.message);
+          return null;
+        });
       } else {
-        const results = await play.search(next.query, { limit: 1 }).catch(() => []);
-        if (!results || results.length === 0) throw new Error('No results found');
-        streamInfo = await play.stream(results[0].url).catch(() => null);
+        logger.debug(`Searching for: ${next.query}`);
+        const results = await play.search(next.query, { limit: 1 }).catch(err => {
+          logger.error(`Search failed for ${next.query}:`, err.message);
+          return [];
+        });
+        if (!results || results.length === 0) {
+          throw new Error(`No results found for "${next.query}"`);
+        }
+        logger.debug(`Found result: ${results[0].title} (${results[0].url})`);
+        streamInfo = await play.stream(results[0].url).catch(err => {
+          logger.error(`Failed to stream search result:`, err.message);
+          return null;
+        });
       }
 
-      if (!streamInfo) throw new Error('Failed to create audio stream');
+      if (!streamInfo) throw new Error('Failed to create audio stream for ' + next.query);
 
+      logger.debug(`Creating audio resource with type: ${streamInfo.type}`);
       const resource = createAudioResource(streamInfo.stream, { inputType: streamInfo.type });
       const player = createAudioPlayer({ behaviors: { noSubscriber: NoSubscriberBehavior.Pause } });
 
       player.play(resource);
+      logger.info(`Playing: ${next.query} (requester: ${next.requester})`);
 
       player.on('error', error => {
-        logger.error('Audio player error', error);
+        logger.error('Audio player error:', error);
       });
 
       player.on(AudioPlayerStatus.Idle, () => {
+        logger.debug('Track finished, playing next...');
         // play next recursively
         setImmediate(() => MusicService.playNext(guild, client));
       });
 
       const conn = getVoiceConnection(guild.id);
-      if (conn) conn.subscribe(player);
+      if (!conn) {
+        logger.warn('No voice connection available, cannot subscribe player');
+        return next;
+      }
+      conn.subscribe(player);
       players.set(guild.id, { player, current: next });
+      logger.debug(`Player subscribed for guild ${guild.id}`);
 
       return next;
     } catch (error) {
