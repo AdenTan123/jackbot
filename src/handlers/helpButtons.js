@@ -1,6 +1,5 @@
 import { createEmbed } from '../utils/embeds.js';
 import { createAllCommandsMenu } from './helpSelectMenus.js';
-import { createInitialHelpMenu } from '../commands/Core/help.js';
 import { ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
 import { logger } from '../utils/logger.js';
 
@@ -16,8 +15,27 @@ export const helpBackButton = {
             if (!interaction.deferred && !interaction.replied) {
                 await interaction.deferUpdate();
             }
+            let createInitialHelpMenu;
+            try {
+                const mod = await import('../commands/Core/help.js');
+                createInitialHelpMenu = mod.createInitialHelpMenu || (mod.default && mod.default.createInitialHelpMenu);
+            } catch (impErr) {
+                logger.warn('Could not load help module for help back button, sending fallback.', { error: String(impErr) });
+            }
 
-            const { embeds, components } = await createInitialHelpMenu(client);
+            let embeds = [];
+            let components = [];
+            if (createInitialHelpMenu) {
+                try {
+                    const res = await createInitialHelpMenu(client);
+                    embeds = res.embeds || res.embed ? [res.embed].filter(Boolean) : (res.embeds || []);
+                    components = res.components || [];
+                } catch (err) {
+                    logger.warn('createInitialHelpMenu failed, using fallback embed', { error: String(err) });
+                }
+            } else {
+                embeds = [createEmbed({ title: 'Help', description: 'Help content is currently unavailable.' })];
+            }
             await interaction.editReply({
                 embeds,
                 components,
