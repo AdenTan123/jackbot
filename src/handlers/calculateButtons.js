@@ -19,7 +19,18 @@ async function calculateModalHandler(interaction, client, args) {
             });
         }
 
-        const { calculationContexts } = await import('../commands/Tools/calculate.js');
+        let calculationContexts;
+        try {
+            const mod = await import('../commands/Tools/calculate.js');
+            calculationContexts = mod.calculationContexts;
+        } catch (impErr) {
+            logger.warn('Calculate module missing or failed to load:', impErr?.message || impErr);
+            return await interaction.reply({
+                embeds: [errorEmbed('Unavailable', 'Calculator feature is not available.')],
+                flags: ['Ephemeral']
+            });
+        }
+
         const context = calculationContexts.get(contextKey);
         
         if (!context) {
