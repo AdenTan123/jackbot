@@ -161,7 +161,45 @@ async function handlePlay(interaction) {
         });
     }
 
+    // Check bot permissions
+    const botMember = interaction.guild.members.me;
+    if (!voiceChannel.permissionsFor(botMember).has(['Connect', 'Speak'])) {
+        return InteractionHelper.safeEditReply(interaction, {
+            embeds: [
+                createEmbed({
+                    title: '❌ Missing Permissions',
+                    description: `I need permission to **Connect** and **Speak** in ${voiceChannel.name}`,
+                    color: 'error',
+                }),
+            ],
+            flags: MessageFlags.Ephemeral,
+        });
+    }
+
     const query = interaction.options.getString('query', true);
+
+    // Join voice channel FIRST to prevent timeout
+    if (!MusicService.isActive(interaction.guildId)) {
+        try {
+            await MusicService.join(voiceChannel);
+        } catch (error) {
+            return InteractionHelper.safeEditReply(interaction, {
+                embeds: [
+                    createEmbed({
+                        title: '❌ Connection Failed',
+                        description: `Could not connect to ${voiceChannel.name}. Please try again.`,
+                        color: 'error',
+                    }),
+                ],
+                flags: MessageFlags.Ephemeral,
+            });
+        }
+    }
+
+    // Get queue and prevent timeout during search
+    const queue = MusicService._getQueue(interaction.guildId);
+    queue._clearInactivityTimeout();
+    queue._isLoading = true;
 
     // Send searching message
     await InteractionHelper.safeEditReply(interaction, {
@@ -175,14 +213,15 @@ async function handlePlay(interaction) {
         flags: MessageFlags.Ephemeral,
     });
 
-    // Join voice channel first to prevent timeout
-    if (!MusicService.isActive(interaction.guildId)) {
-        await MusicService.join(voiceChannel);
-    }
-
+    // Search for track
     const track = await MusicService.search(query);
+    
+    // Clear loading state
+    queue._isLoading = false;
 
     if (!track) {
+        // Start inactivity timer if no track found
+        queue._startInactivityTimer();
         return InteractionHelper.safeEditReply(interaction, {
             embeds: [
                 createEmbed({
