@@ -37,20 +37,15 @@ export default {
         music.queue.push({ requester: interaction.user.id, query, addedAt: new Date().toISOString() });
         await updateGuildConfig(interaction.client, guildId, { music }).catch(() => {});
 
-        // Try to join immediately but start playback in the background so we don't block the interaction
+        // If not already playing, try to join and start playback
         try {
           const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
           if (guild) {
             await MusicService.ensureConnection(guild, interaction.member).catch(() => null);
-            MusicService.playNext(guild, interaction.client)
-              .then(started => {
-                if (started) {
-                  InteractionHelper.safeReply(interaction, { embeds: [successEmbed('Playing', `Now playing: ${started.query}`)] });
-                }
-              })
-              .catch(e => {
-                logger.debug('Background playNext failed', e?.message || e);
-              });
+            const started = await MusicService.playNext(guild, interaction.client).catch(() => null);
+            if (started) {
+              return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Playing', `Now playing: ${started.query}`)] });
+            }
           }
         } catch (e) {
           logger.debug('Music start attempt failed', e?.message || e);
