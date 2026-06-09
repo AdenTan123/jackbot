@@ -18,7 +18,8 @@ export default {
     .addSubcommand(s => s.setName('setsetting').setDescription('Update server setting').addBooleanOption(o => o.setName('hidefromlist').setDescription('Hide from server list')).addBooleanOption(o => o.setName('private').setDescription('Friends only')).addIntegerOption(o => o.setName('minlevel').setDescription('Minimum level')))
     .addSubcommand(s => s.setName('banplayer').setDescription('Ban or unban a user').addIntegerOption(o => o.setName('userid').setDescription('UserId to ban/unban').setRequired(true)).addBooleanOption(o => o.setName('banned').setDescription('Ban (true) or unban (false)').setRequired(true)))
     .addSubcommand(s => s.setName('kick').setDescription('Kick a player by UserId').addIntegerOption(o => o.setName('userid').setDescription('UserId to kick').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Optional reason')))
-    .addSubcommand(s => s.setName('setbanner').setDescription('Set a server banner').addStringOption(o => o.setName('banner').setDescription('Banner text').setRequired(true))),
+    .addSubcommand(s => s.setName('setbanner').setDescription('Set a server banner').addStringOption(o => o.setName('banner').setDescription('Banner text').setRequired(true)))
+    .addSubcommand(s => s.setName('startup').setDescription('Mark server as started and broadcast startup message')),
 
   async execute(interaction) {
     const deferSuccess = await InteractionHelper.safeDefer(interaction);
@@ -72,11 +73,54 @@ export default {
           if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Announce failed', res?.error || null)] });
           return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Announcement sent')] });
         }
-        case 'shutdown': {
-          const res = await api.shutdown(overrides);
-          if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Shutdown failed', res?.error || null)] });
-          return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Server shutdown initiated (30s)')] });
-        }
+          case 'shutdown': {
+            const bannerText = `⚠️ SSD || The server is now shutting down. Thank you for playing.`;
+
+            // attempt to set banner and hide from list before shutdown
+            try {
+              const bres = await api.setBanner(bannerText, overrides);
+              // ignore bres success check - best effort
+            } catch (e) {
+              logger.warn('Failed to set banner before shutdown:', e?.message || e);
+            }
+
+            try {
+              await api.setSetting({ HideFromList: true }, overrides);
+            } catch (e) {
+              logger.warn('Failed to set HideFromList before shutdown:', e?.message || e);
+            }
+
+            const res = await api.shutdown(overrides);
+            if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Shutdown failed', res?.error || null)] });
+            return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Server shutdown initiated (30s)')] });
+          }
+          case 'startup': {
+            // perform setsetting hidefromlist:True (user requested)
+            try {
+              await api.setSetting({ HideFromList: true }, overrides);
+            } catch (e) {
+              logger.warn('Failed to set HideFromList on startup:', e?.message || e);
+            }
+
+            // reply to the command with embed + link
+            const joinLink = 'https://www.roblox.com/games/start?placeId=8704997000&launchData=%7B%22serverCode%22%3A%22f99%2D57a%22%7D';
+            const embed = createEmbed({ title: 'Successfully Started Up Server', description: `Join Server with this link: ${joinLink}` });
+            await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+
+            // attempt to post announcement in target channel
+            const announceChannelId = '1507406822288654467';
+            try {
+              const channel = await interaction.client.channels.fetch(announceChannelId).catch(() => null);
+              if (channel && channel.isTextBased && channel.send) {
+                const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${interaction.user.id}>\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
+                await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
+              }
+            } catch (e) {
+              logger.warn('Could not post startup announcement:', e?.message || e);
+            }
+
+            return;
+          }
         case 'setsetting': {
           const HideFromList = interaction.options.getBoolean('hidefromlist');
           const Private = interaction.options.getBoolean('private');
