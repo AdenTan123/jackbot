@@ -1,7 +1,5 @@
 /**
  * MusicService - Manages per-guild music queues and voice connections.
- * Uses @discordjs/voice for playback, play-dl for search, and yt-dlp for
- * YouTube audio streams.
  */
 
 import { spawn } from 'node:child_process';
@@ -34,6 +32,7 @@ const queues = new Map();
 // Initialize play-dl
 try {
     await playdl.getFreeClientID();
+    logger.info('[MusicService] play-dl initialized successfully');
 } catch (error) {
     logger.warn('[MusicService] Could not initialize play-dl client ID:', error);
 }
@@ -69,7 +68,7 @@ function createYtDlpAudioStream(url) {
         '--quiet',
         '--no-warnings',
         '--format',
-        'bestaudio[acodec=opus][ext=webm]/bestaudio[ext=webm]/bestaudio[acodec=opus]/bestaudio/best',
+        'bestaudio',
         '--output',
         '-',
         url,
@@ -89,7 +88,7 @@ function createYtDlpAudioStream(url) {
     child.on('error', (error) => {
         logger.error(`[MusicService] yt-dlp error:`, error);
         child.stdout.destroy(
-            new Error(`Could not start yt-dlp. Run npm install or set YTDLP_PATH. ${error.message}`),
+            new Error(`Could not start yt-dlp. ${error.message}`),
         );
     });
 
@@ -111,21 +110,29 @@ function createYtDlpAudioStream(url) {
 }
 
 async function createTrackResource(url, volume) {
-    const audioStream = createYtDlpAudioStream(url);
-    const { stream, type } = await demuxProbe(audioStream);
-    const resource = createAudioResource(stream, {
-        inputType: type,
-        inlineVolume: true,
-    });
-    resource.volume?.setVolume(volume);
-    return resource;
+    logger.info(`[MusicService] Creating track resource for: ${url}`);
+    try {
+        const audioStream = createYtDlpAudioStream(url);
+        const { stream, type } = await demuxProbe(audioStream);
+        logger.info(`[MusicService] Demux probe successful, stream type: ${type}`);
+        const resource = createAudioResource(stream, {
+            inputType: type,
+            inlineVolume: true,
+        });
+        resource.volume?.setVolume(volume);
+        logger.info(`[MusicService] Audio resource created successfully`);
+        return resource;
+    } catch (error) {
+        logger.error(`[MusicService] Failed to create track resource:`, error);
+        throw error;
+    }
 }
 
 /**
  * @typedef {Object} Track
  * @property {string} title
  * @property {string} url
- * @property {string} duration   - formatted "mm:ss"
+ * @property {string} duration
  * @property {string} thumbnail
  * @property {string} requesterId
  * @property {string} requesterTag
@@ -154,7 +161,16 @@ class GuildQueue {
         });
 
         this.player.on(AudioPlayerStatus.Idle, () => {
+            logger.info(`[MusicService] Player idle in guild ${this.guildId}`);
             this._playNext();
+        });
+
+        this.player.on(AudioPlayerStatus.Playing, () => {
+            logger.info(`[MusicService] Player playing in guild ${this.guildId}`);
+        });
+
+        this.player.on(AudioPlayerStatus.Paused, () => {
+            logger.info(`[MusicService] Player paused in guild ${this.guildId}`);
         });
 
         this.player.on('error', (error) => {
@@ -185,11 +201,13 @@ class GuildQueue {
 
     async _playNext() {
         this._clearInactivityTimeout();
+        logger.info(`[MusicService] _playNext called, tracks left: ${this.tracks.length}`);
 
         if (this.tracks.length === 0) {
             this.currentTrack = null;
             this.startedAt = null;
             this._startInactivityTimer();
+            logger.info(`[MusicService] No more tracks in queue for guild ${this.guildId}`);
             return;
         }
 
@@ -197,6 +215,8 @@ class GuildQueue {
         this.currentTrack = track;
         this.startedAt = Date.now();
         this._isLoading = true;
+
+        logger.info(`[MusicService] Playing next track: "${track.title}" for guild ${this.guildId}`);
 
         this._keepAliveInterval = setInterval(() => {
             if (this._isLoading) {
@@ -206,11 +226,10 @@ class GuildQueue {
         }, 10000);
 
         try {
-            logger.info(`[MusicService] Loading track: "${track.title}" for guild ${this.guildId}`);
             const resource = await createTrackResource(track.url, this.volume);
             
-            if (!resource || !resource.playable) {
-                throw new Error('Invalid audio resource created');
+            if (!resource) {
+                throw new Error('Resource is null');
             }
             
             this._isLoading = false;
@@ -219,8 +238,16 @@ class GuildQueue {
                 this._keepAliveInterval = null;
             }
             
-            logger.info(`[MusicService] Playing track: "${track.title}" for guild ${this.guildId}`);
+            logger.info(`[MusicService] Playing track: "${track.title}"`);
             this.player.play(resource);
+            
+            // Verify it's actually playing
+            setTimeout(() => {
+                if (this.player.state.status !== AudioPlayerStatus.Playing) {
+                    logger.warn(`[MusicService] Track "${track.title}" is not playing! Status: ${this.player.state.status}`);
+                }
+            }, 2000);
+            
         } catch (error) {
             this._isLoading = false;
             if (this._keepAliveInterval) {
@@ -247,6 +274,7 @@ class GuildQueue {
         try {
             this.player?.stop(true);
             this.connection?.destroy();
+            logger.info(`[MusicService] Destroyed queue for guild ${this.guildId}`);
         } catch (error) {
             logger.error(`[MusicService] Error destroying queue for guild ${this.guildId}:`, error);
         }
@@ -260,6 +288,7 @@ class GuildQueue {
 export const MusicService = {
     _getQueue(guildId) {
         if (!queues.has(guildId)) {
+            logger.info(`[MusicService] Creating new queue for guild ${guildId}`);
             queues.set(guildId, new GuildQueue(guildId));
         }
         return queues.get(guildId);
@@ -327,9 +356,12 @@ export const MusicService = {
         const queue = this._getQueue(channel.guild.id);
 
         if (queue.connection && queue.connection.state.status !== VoiceConnectionStatus.Destroyed) {
+            logger.info(`[MusicService] Already connected to voice channel in guild ${channel.guild.id}`);
             return queue;
         }
 
+        logger.info(`[MusicService] Joining voice channel ${channel.name} in guild ${channel.guild.id}`);
+        
         const connection = joinVoiceChannel({
             channelId: channel.id,
             guildId: channel.guild.id,
@@ -340,8 +372,10 @@ export const MusicService = {
 
         try {
             await entersState(connection, VoiceConnectionStatus.Ready, 30000);
+            logger.info(`[MusicService] Successfully joined voice channel ${channel.name}`);
         } catch (error) {
             connection.destroy();
+            logger.error(`[MusicService] Failed to join voice channel:`, error);
             throw new Error('Could not connect to the voice channel in time.');
         }
 
@@ -349,12 +383,14 @@ export const MusicService = {
         connection.subscribe(queue.player);
 
         connection.on(VoiceConnectionStatus.Disconnected, async () => {
+            logger.warn(`[MusicService] Disconnected from voice channel in guild ${channel.guild.id}`);
             try {
                 await Promise.race([
                     entersState(connection, VoiceConnectionStatus.Signalling, 5000),
                     entersState(connection, VoiceConnectionStatus.Connecting, 5000),
                 ]);
             } catch {
+                logger.warn(`[MusicService] Failed to reconnect, destroying queue`);
                 queue.destroy();
             }
         });
@@ -365,13 +401,21 @@ export const MusicService = {
     async addTrack(guildId, track) {
         const queue = this._getQueue(guildId);
         queue.tracks.push(track);
+        logger.info(`[MusicService] Added track "${track.title}" to queue. Queue length: ${queue.tracks.length}`);
         
         queue._clearInactivityTimeout();
 
-        if (queue.player.state.status === AudioPlayerStatus.Idle && 
-            !queue.currentTrack && 
-            !queue._isLoading) {
+        const isIdle = queue.player.state.status === AudioPlayerStatus.Idle;
+        const hasNoCurrentTrack = !queue.currentTrack;
+        const notLoading = !queue._isLoading;
+        
+        logger.info(`[MusicService] Player status: ${queue.player.state.status}, hasCurrentTrack: ${!!queue.currentTrack}, isLoading: ${queue._isLoading}`);
+        
+        if (isIdle && hasNoCurrentTrack && notLoading) {
+            logger.info(`[MusicService] Starting playback immediately`);
             await queue._playNext();
+        } else {
+            logger.info(`[MusicService] Track queued, will play later`);
         }
     },
 
