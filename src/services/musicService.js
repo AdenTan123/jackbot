@@ -1,8 +1,13 @@
 /**
  * MusicService - Manages per-guild music queues and voice connections.
- * Uses @discordjs/voice + play-dl for streaming.
+ * Uses @discordjs/voice for playback, play-dl for search, and yt-dlp for
+ * YouTube audio streams.
  */
 
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import {
     createAudioPlayer,
     createAudioResource,
@@ -11,12 +16,97 @@ import {
     VoiceConnectionStatus,
     entersState,
     NoSubscriberBehavior,
+    demuxProbe,
 } from '@discordjs/voice';
 import playdl from 'play-dl';
 import { logger } from '../utils/logger.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const downloadedYtDlpPath = path.resolve(
+    __dirname,
+    '../../.local/yt-dlp',
+    process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp',
+);
+
 /** @type {Map<string, GuildQueue>} */
 const queues = new Map();
+
+function getVideoUrl(videoInfo) {
+    if (videoInfo?.url) return videoInfo.url;
+    if (videoInfo?.id) return `https://www.youtube.com/watch?v=${videoInfo.id}`;
+    return null;
+}
+
+function getThumbnailUrl(videoInfo) {
+    return (
+        videoInfo?.thumbnails?.[0]?.url ??
+        videoInfo?.thumbnail?.url ??
+        videoInfo?.thumbnail ??
+        null
+    );
+}
+
+async function createTrackResource(url, volume) {
+    const audioStream = createYtDlpAudioStream(url);
+    const { stream, type } = await demuxProbe(audioStream);
+    const resource = createAudioResource(stream, {
+        inputType: type,
+        inlineVolume: true,
+    });
+    resource.volume?.setVolume(volume);
+    return resource;
+}
+
+function getYtDlpPath() {
+    if (process.env.YTDLP_PATH) return process.env.YTDLP_PATH;
+    if (existsSync(downloadedYtDlpPath)) return downloadedYtDlpPath;
+    return 'yt-dlp';
+}
+
+function createYtDlpAudioStream(url) {
+    const child = spawn(getYtDlpPath(), [
+        '--ignore-config',
+        '--no-playlist',
+        '--quiet',
+        '--no-warnings',
+        '--format',
+        'bestaudio[acodec=opus][ext=webm]/bestaudio[ext=webm]/bestaudio[acodec=opus]/bestaudio/best',
+        '--output',
+        '-',
+        url,
+    ], {
+        stdio: ['ignore', 'pipe', 'pipe'],
+    });
+
+    let stderr = '';
+    let closed = false;
+
+    child.stderr.setEncoding('utf8');
+    child.stderr.on('data', (chunk) => {
+        stderr += chunk;
+        if (stderr.length > 4000) stderr = stderr.slice(-4000);
+    });
+
+    child.on('error', (error) => {
+        child.stdout.destroy(
+            new Error(`Could not start yt-dlp. Run npm install or set YTDLP_PATH. ${error.message}`),
+        );
+    });
+
+    child.on('close', (code) => {
+        closed = true;
+        if (code !== 0 && !child.stdout.destroyed) {
+            const details = stderr.trim() || `yt-dlp exited with code ${code}`;
+            child.stdout.destroy(new Error(details));
+        }
+    });
+
+    child.stdout.on('close', () => {
+        if (!closed && !child.killed) child.kill('SIGTERM');
+    });
+
+    return child.stdout;
+}
 
 /**
  * @typedef {Object} Track
@@ -74,12 +164,7 @@ class GuildQueue {
         this.startedAt = Date.now();
 
         try {
-            const stream = await playdl.stream(track.url, { quality: 2 });
-            const resource = createAudioResource(stream.stream, {
-                inputType: stream.type,
-                inlineVolume: true,
-            });
-            resource.volume?.setVolume(this.volume);
+            const resource = await createTrackResource(track.url, this.volume);
             this.player.play(resource);
         } catch (error) {
             logger.error(`[MusicService] Failed to stream track "${track.title}":`, error);
@@ -132,15 +217,18 @@ export const MusicService = {
                 videoInfo = results[0];
             }
 
+            const url = getVideoUrl(videoInfo);
+            if (!url) return null;
+
             const durationSecs = videoInfo.durationInSec ?? 0;
             const mins = Math.floor(durationSecs / 60);
             const secs = String(durationSecs % 60).padStart(2, '0');
 
             return {
                 title: videoInfo.title ?? 'Unknown Title',
-                url: videoInfo.url,
+                url,
                 duration: durationSecs > 0 ? `${mins}:${secs}` : 'Live',
-                thumbnail: videoInfo.thumbnails?.[0]?.url ?? null,
+                thumbnail: getThumbnailUrl(videoInfo),
                 requesterId: null,
                 requesterTag: null,
             };
