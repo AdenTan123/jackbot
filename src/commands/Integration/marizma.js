@@ -165,7 +165,33 @@ export default {
             const announceChannelId = '1507406822288654467';
             try {
               const channel = await interaction.client.channels.fetch(announceChannelId).catch(() => null);
-              if (channel && channel.isTextBased && channel.send) {
+              if (channel && channel.isTextBased && channel.messages) {
+                // purge previous session messages (bulk delete in batches, respecting 14-day limit)
+                try {
+                  let fetched;
+                  do {
+                    fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+                    if (!fetched || fetched.size === 0) break;
+                    const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
+                    if (deletable.size > 0) {
+                      await channel.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure (startup):', err?.message || err));
+                    } else {
+                      break;
+                    }
+                  } while (fetched && fetched.size > 0);
+                } catch (purgeErr) {
+                  logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
+                }
+
+                // send the welcoming WBM embed/message after purge
+                try {
+                  const wbmEmbed = createEmbed({ title: '‧₊˚ ┊WBM SESSIONS┊˚₊‧', description: `⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔\n\nWelcome to Willowbrook Memorial! We are delighted to see you join our immersive roleplay community. Take part in roleplay with us with your favourite role, either be a nurse, paramedic, a doctor, surgeon or even just a patient, you can do it all here in Willowbrook!\n\nPlease note our server is currently closed, if you had our sessions ping, you will get pinged if we have any sessions! Thank you!\n⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔` });
+                  await channel.send({ embeds: [wbmEmbed] }).catch(err => logger.warn('Failed to send WBM embed on startup:', err?.message || err));
+                } catch (wbmErr) {
+                  logger.warn('Could not send WBM embed after purge (startup):', wbmErr?.message || wbmErr);
+                }
+
+                // then send the normal startup announcement
                 const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${hostUser.id}>\n\nCohost: <@${cohostUser.id}>\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
                 await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
               }
