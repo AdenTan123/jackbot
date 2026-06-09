@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
@@ -21,7 +21,6 @@ export default {
       const sub = interaction.options.getSubcommand();
       const guildId = interaction.guildId;
 
-      // Fix #2: Don't silently swallow config errors — fail loudly
       const cfg = await getGuildConfig(interaction.client, guildId).catch(() => null);
       if (!cfg) {
         return await InteractionHelper.safeEditReply(interaction, {
@@ -37,28 +36,20 @@ export default {
         music.queue.push({ requester: interaction.user.id, query, addedAt: new Date().toISOString() });
         await updateGuildConfig(interaction.client, guildId, { music }).catch(() => {});
 
-        // Try to join immediately but start playback in the background so we don't block the interaction
-        try {
-          const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
-          if (guild) {
-            await MusicService.ensureConnection(guild, interaction.member).catch(() => null);
-            MusicService.playNext(guild, interaction.client)
-              .then(started => {
-                if (started) {
-                  InteractionHelper.safeReply(interaction, { embeds: [successEmbed('Playing', `Now playing: ${started.query}`)] });
-                }
-              })
-              .catch(e => {
-                logger.debug('Background playNext failed', e?.message || e);
-              });
-          }
-        } catch (e) {
-          logger.debug('Music start attempt failed', e?.message || e);
-        }
-
-        return await InteractionHelper.safeEditReply(interaction, {
+        // Reply immediately — don't await background playback
+        await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed('Queued', `Added **${query}** to the queue.`)]
         });
+
+        // Fix: fire-and-forget with no further interaction calls
+        const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
+        if (guild) {
+          MusicService.ensureConnection(guild, interaction.member)
+            .then(() => MusicService.playNext(guild, interaction.client))
+            .catch(e => logger.debug('Background music start failed', e?.message || e));
+        }
+
+        return;
       }
 
       if (sub === 'stop') {
@@ -72,22 +63,28 @@ export default {
       }
 
       if (sub === 'admin') {
-        // Fix #1: setDefaultMemberPermissions doesn't work on subcommands — check permissions manually
         if (!interaction.memberPermissions?.has(PermissionFlagsBits.ManageGuild)) {
           return await InteractionHelper.safeEditReply(interaction, {
             embeds: [errorEmbed('Missing Permissions', 'You need **Manage Guild** to use this.')]
           });
         }
 
+        const queue = music.queue || [];
         const panel = createEmbed({
-          title: 'Music Admin Panel',
-          description: `Volume: ${music.volume}%\nQueue length: ${(music.queue || []).length}`
+          title: '🎵 Music Admin Panel',
+          description: [
+            `**Status:** ${music.playing ? '▶️ Playing' : '⏹️ Stopped'}`,
+            `**Volume:** ${music.volume ?? 100}%`,
+            `**Queue:** ${queue.length} track${queue.length !== 1 ? 's' : ''}`,
+            queue.length > 0 ? `**Next:** ${queue[0].query}` : ''
+          ].filter(Boolean).join('\n')
         });
 
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder().setCustomId('music_admin:play').setLabel('Play').setStyle(ButtonStyle.Primary),
-          new ButtonBuilder().setCustomId('music_admin:stop').setLabel('Stop').setStyle(ButtonStyle.Danger),
-          new ButtonBuilder().setCustomId('music_admin:queue').setLabel('Queue').setStyle(ButtonStyle.Secondary)
+        const row = InteractionHelper.buildActionRow(
+          InteractionHelper.buildButton('music_admin:play', '▶️ Play', 'Primary'),
+          InteractionHelper.buildButton('music_admin:stop', '⏹️ Stop', 'Danger'),
+          InteractionHelper.buildButton('music_admin:queue', '📋 Queue', 'Secondary'),
+          InteractionHelper.buildButton('music_admin:refresh', '🔄 Refresh', 'Secondary')
         );
 
         return await InteractionHelper.safeEditReply(interaction, { embeds: [panel], components: [row] });
