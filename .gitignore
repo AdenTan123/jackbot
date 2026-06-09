@@ -144,3 +144,5 @@ dist
 # Database backup artifacts
 backups/
 *.dump
+
+echo "src/commands/Music/config.txt" >> .gitignore
