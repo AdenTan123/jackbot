@@ -100,7 +100,17 @@ function cleanupCountdown(countdownId, activeCountdowns) {
 
 async function countdownButtonHandler(interaction, client, args) {
     try {
-        const { activeCountdowns } = await import('../commands/Tools/countdown.js');
+        let activeCountdowns;
+        try {
+            const mod = await import('../commands/Tools/countdown.js');
+            activeCountdowns = mod.activeCountdowns;
+        } catch (impErr) {
+            logger.warn('Countdown module missing or failed to load:', impErr?.message || impErr);
+            return await interaction.reply({
+                content: 'Countdown feature is not available.',
+                flags: ['Ephemeral']
+            });
+        }
         const action = args[0];
         const countdownId = args[1];
 

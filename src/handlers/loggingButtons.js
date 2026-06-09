@@ -9,7 +9,6 @@ import {
   parseEventTypeFromButton 
 } from '../utils/loggingUi.js';
 import { logger } from '../utils/logger.js';
-import { buildLoggingDashboardView } from '../commands/Logging/modules/logging_dashboard.js';
 
 const LOGGING_CATEGORIES = [...new Set(Object.values(EVENT_TYPES).map((eventType) => eventType.split('.')[0]))];
 
@@ -27,12 +26,12 @@ export default {
       }
 
       // Dashboard-specific buttons
-      if (interaction.customId === 'log_dash_refresh') {
-        return await handleDashboardRefresh(interaction);
-      }
-      if (interaction.customId.startsWith('log_dash_toggle')) {
-        return await handleDashboardToggle(interaction);
-      }
+        if (interaction.customId === 'log_dash_refresh') {
+          return await handleDashboardRefresh(interaction);
+        }
+        if (interaction.customId.startsWith('log_dash_toggle')) {
+          return await handleDashboardToggle(interaction);
+        }
 
       // Legacy /config logging status buttons
       if (interaction.customId === 'logging_refresh_status') {
@@ -68,11 +67,15 @@ async function handleToggle(interaction) {
       const newState = !Boolean(status.enabled);
       await setLoggingEnabled(interaction.client, interaction.guildId, newState);
 
-      const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
-      return interaction.update({
-        embeds: [embed],
-        components
-      });
+      try {
+        const mod = await import('../commands/Logging/modules/logging_dashboard.js');
+        const { buildLoggingDashboardView } = mod;
+        const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
+        return interaction.update({ embeds: [embed], components });
+      } catch (impErr) {
+        logger.warn('Logging dashboard module missing or failed to load:', impErr?.message || impErr);
+        return interaction.reply({ content: 'Logging dashboard is not available.', ephemeral: true });
+      }
     }
     
     if (eventType === 'all') {
@@ -90,11 +93,15 @@ async function handleToggle(interaction) {
       await toggleEventLogging(interaction.client, interaction.guildId, eventType, newState);
     }
 
-    const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
-    await interaction.update({
-      embeds: [embed],
-      components
-    });
+    try {
+      const mod = await import('../commands/Logging/modules/logging_dashboard.js');
+      const { buildLoggingDashboardView } = mod;
+      const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
+      await interaction.update({ embeds: [embed], components });
+    } catch (impErr) {
+      logger.warn('Logging dashboard module missing or failed to load:', impErr?.message || impErr);
+      await interaction.reply({ content: 'Logging dashboard is not available.', ephemeral: true });
+    }
 
   } catch (error) {
     logger.error('Error toggling logging:', error);
@@ -107,12 +114,15 @@ async function handleToggle(interaction) {
 
 async function handleRefresh(interaction) {
   try {
-    const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
-
-    await interaction.update({
-      embeds: [embed],
-      components
-    });
+    try {
+      const mod = await import('../commands/Logging/modules/logging_dashboard.js');
+      const { buildLoggingDashboardView } = mod;
+      const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
+      await interaction.update({ embeds: [embed], components });
+    } catch (impErr) {
+      logger.warn('Logging dashboard module missing or failed to load:', impErr?.message || impErr);
+      await interaction.reply({ content: 'Logging dashboard is not available.', ephemeral: true });
+    }
 
   } catch (error) {
     logger.error('Error refreshing logging status:', error);
@@ -147,8 +157,15 @@ async function handleDashboardToggle(interaction) {
       await toggleEventLogging(interaction.client, interaction.guildId, eventType, !currentState);
     }
 
-    const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
-    await interaction.update({ embeds: [embed], components });
+    try {
+      const mod = await import('../commands/Logging/modules/logging_dashboard.js');
+      const { buildLoggingDashboardView } = mod;
+      const { embed, components } = await buildLoggingDashboardView(interaction, interaction.client);
+      await interaction.update({ embeds: [embed], components });
+    } catch (impErr) {
+      logger.warn('Logging dashboard module missing or failed to load:', impErr?.message || impErr);
+      await interaction.reply({ content: 'Logging dashboard is not available.', ephemeral: true });
+    }
   } catch (error) {
     logger.error('Error in dashboard toggle:', error);
     await interaction.reply({ content: '❌ An error occurred while toggling.', ephemeral: true });
