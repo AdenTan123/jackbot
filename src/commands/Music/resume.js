@@ -3,7 +3,7 @@ import { successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
-import { queues } from '../../utils/musicQueue.js';
+import { distube } from '../../utils/musicQueue.js';
 
 export default {
   data: new SlashCommandBuilder()
@@ -14,12 +14,11 @@ export default {
   async execute(interaction, config, client) {
     const deferSuccess = await InteractionHelper.safeDefer(interaction);
     if (!deferSuccess) return;
-
     try {
-      const queue = queues.get(interaction.guildId);
+      const queue = distube.getQueue(interaction.guildId);
       if (!queue) throw new Error('Nothing is paused.');
-
-      queue.resume();
+      if (!queue.paused) throw new Error('Playback is not paused.');
+      distube.resume(interaction.guildId);
       await InteractionHelper.safeEditReply(interaction, {
         embeds: [successEmbed('Playback resumed.', '▶️ Resumed')],
       });

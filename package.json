@@ -18,7 +18,6 @@
   "dependencies": {
     "@discordjs/opus": "^0.10.0",
     "@discordjs/rest": "^2.6.1",
-    "@discordjs/voice": "^0.16.1",
     "@distube/soundcloud": "^2.0.4",
     "@distube/ytdl-core": "^4.16.12",
     "axios": "^1.15.2",

@@ -1,9 +1,9 @@
 import { SlashCommandBuilder } from 'discord.js';
-import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
-import { getOrCreateQueue, queues } from '../../utils/musicQueue.js';
+import { distube } from '../../utils/musicQueue.js';
 
 export default {
   data: new SlashCommandBuilder()
@@ -21,60 +21,49 @@ export default {
       const voiceChannel = interaction.member.voice.channel;
       if (!voiceChannel) throw new Error('You need to be in a voice channel first.');
 
-      const botMember = interaction.guild.members.me;
-      const perms = voiceChannel.permissionsFor(botMember);
-      if (!perms.has('Connect') || !perms.has('Speak'))
-        throw new Error('I need **Connect** and **Speak** permissions in your voice channel.');
-
       const query = interaction.options.getString('query');
-      const queue = getOrCreateQueue(interaction.guildId);
 
-      const track = await queue.add(query, interaction.user);
-      const wasEmpty = queue.tracks.length === 1;
+      distube.once('playSong', async (queue, song) => {
+        await InteractionHelper.safeEditReply(interaction, {
+          embeds: [createEmbed({
+            title: '🎵 Now Playing',
+            description: `**[${song.name}](${song.url})**`,
+            color: 'success',
+            fields: [
+              { name: '⏱️ Duration', value: song.formattedDuration, inline: true },
+              { name: '👤 Requested by', value: `${interaction.user}`, inline: true },
+            ],
+            thumbnail: song.thumbnail,
+            timestamp: true,
+          })],
+        });
+      });
 
-      if (wasEmpty) {
-        await queue.join(voiceChannel);
-        await queue.playNext(client);
+      distube.once('addSong', async (queue, song) => {
         await InteractionHelper.safeEditReply(interaction, {
-          embeds: [nowPlayingEmbed(track)],
+          embeds: [createEmbed({
+            title: '📋 Added to Queue',
+            description: `**[${song.name}](${song.url})**`,
+            color: 'info',
+            fields: [
+              { name: '⏱️ Duration', value: song.formattedDuration, inline: true },
+              { name: '📌 Position', value: `#${queue.songs.length - 1}`, inline: true },
+              { name: '👤 Requested by', value: `${interaction.user}`, inline: true },
+            ],
+            thumbnail: song.thumbnail,
+            timestamp: true,
+          })],
         });
-      } else {
-        await InteractionHelper.safeEditReply(interaction, {
-          embeds: [queuedEmbed(track, queue.tracks.length - 1)],
-        });
-      }
+      });
+
+      await distube.play(voiceChannel, query, {
+        member: interaction.member,
+        textChannel: interaction.channel,
+      });
+
     } catch (error) {
       logger.error('Play command error:', error);
       await handleInteractionError(interaction, error, { subtype: 'play_failed' });
     }
   },
 };
-
-function nowPlayingEmbed(track) {
-  return createEmbed({
-    title: '🎵 Now Playing',
-    description: `**[${track.title}](${track.url})**`,
-    color: 'success',
-    fields: [
-      { name: '⏱️ Duration', value: track.duration, inline: true },
-      { name: '👤 Requested by', value: `${track.requestedBy}`, inline: true },
-    ],
-    thumbnail: track.thumbnail,
-    timestamp: true,
-  });
-}
-
-function queuedEmbed(track, position) {
-  return createEmbed({
-    title: '📋 Added to Queue',
-    description: `**[${track.title}](${track.url})**`,
-    color: 'info',
-    fields: [
-      { name: '⏱️ Duration', value: track.duration, inline: true },
-      { name: '📌 Position', value: `#${position}`, inline: true },
-      { name: '👤 Requested by', value: `${track.requestedBy}`, inline: true },
-    ],
-    thumbnail: track.thumbnail,
-    timestamp: true,
-  });
-}

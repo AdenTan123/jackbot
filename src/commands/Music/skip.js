@@ -3,7 +3,7 @@ import { successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
-import { queues } from '../../utils/musicQueue.js';
+import { distube } from '../../utils/musicQueue.js';
 
 export default {
   data: new SlashCommandBuilder()
@@ -14,17 +14,14 @@ export default {
   async execute(interaction, config, client) {
     const deferSuccess = await InteractionHelper.safeDefer(interaction);
     if (!deferSuccess) return;
-
     try {
-      const queue = queues.get(interaction.guildId);
-      if (!queue?.isPlaying) throw new Error('Nothing is currently playing.');
+      const queue = distube.getQueue(interaction.guildId);
+      if (!queue) throw new Error('Nothing is currently playing.');
       if (!interaction.member.voice.channel) throw new Error('You need to be in a voice channel.');
-
-      const skipped = queue.nowPlaying();
-      queue.skip();
-
+      const skipped = queue.songs[0];
+      await distube.skip(interaction.guildId);
       await InteractionHelper.safeEditReply(interaction, {
-        embeds: [successEmbed(`Skipped **${skipped.title}**`, '⏭️ Skipped')],
+        embeds: [successEmbed(`Skipped **${skipped.name}**`, '⏭️ Skipped')],
       });
     } catch (error) {
       logger.error('Skip command error:', error);
