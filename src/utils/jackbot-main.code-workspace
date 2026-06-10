@@ -1,0 +1,17 @@
+{
+	"folders": [
+		{
+			"name": "jackbot-main",
+			"path": "../.."
+		},
+		{
+			"name": "scripts",
+			"path": "../../../MusicBot-0.4.3/scripts"
+		},
+		{
+			"name": "src",
+			"path": "../../../MusicBot-0.4.3/src"
+		}
+	],
+	"settings": {}
+}

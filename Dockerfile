@@ -21,3 +21,18 @@ EXPOSE 3000
 
 # Start the bot
 CMD [ "npm", "start" ]
+
+
+FROM node:18-slim
+
+# Install ONLY what's needed for music
+RUN apt-get update && \
+    apt-get install -y ffmpeg && \
+    apt-get clean
+
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+
+CMD ["node", "src/app.js"]
