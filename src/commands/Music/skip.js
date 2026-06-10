@@ -1,12 +1,34 @@
-const { SlashCommandBuilder } = require('discord.js');
-const { queues } = require('../../utils/MusicQueue');
+import { SlashCommandBuilder } from 'discord.js';
+import { successEmbed } from '../../utils/embeds.js';
+import { logger } from '../../utils/logger.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { handleInteractionError } from '../../utils/errorHandler.js';
+import { queues } from '../../utils/musicQueue.js';
 
-module.exports = {
-  data: new SlashCommandBuilder().setName('skip').setDescription('Skip the current song'),
-  async execute(interaction) {
-    const queue = queues.get(interaction.guildId);
-    if (!queue?.playing) return interaction.reply({ content: '❌ Nothing is playing.', ephemeral: true });
-    queue.skip();
-    interaction.reply('⏭️ Skipped!');
-  }
+export default {
+  data: new SlashCommandBuilder()
+    .setName('skip')
+    .setDescription('Skip the current song'),
+  category: 'music',
+
+  async execute(interaction, config, client) {
+    const deferSuccess = await InteractionHelper.safeDefer(interaction);
+    if (!deferSuccess) return;
+
+    try {
+      const queue = queues.get(interaction.guildId);
+      if (!queue?.isPlaying) throw new Error('Nothing is currently playing.');
+      if (!interaction.member.voice.channel) throw new Error('You need to be in a voice channel.');
+
+      const skipped = queue.nowPlaying();
+      queue.skip();
+
+      await InteractionHelper.safeEditReply(interaction, {
+        embeds: [successEmbed(`Skipped **${skipped.title}**`, '⏭️ Skipped')],
+      });
+    } catch (error) {
+      logger.error('Skip command error:', error);
+      await handleInteractionError(interaction, error, { subtype: 'skip_failed' });
+    }
+  },
 };

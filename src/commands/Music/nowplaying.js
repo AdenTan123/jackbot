@@ -7,8 +7,8 @@ import { queues } from '../../utils/musicQueue.js';
 
 export default {
   data: new SlashCommandBuilder()
-    .setName('queue')
-    .setDescription('Show the current music queue'),
+    .setName('nowplaying')
+    .setDescription('Show the currently playing song'),
   category: 'music',
 
   async execute(interaction, config, client) {
@@ -17,30 +17,31 @@ export default {
 
     try {
       const queue = queues.get(interaction.guildId);
-      if (!queue?.tracks.length) {
+      const track = queue?.nowPlaying();
+      if (!track) {
         return InteractionHelper.safeEditReply(interaction, {
-          embeds: [infoEmbed('The queue is empty. Use `/play` to add songs.', '📭 Empty Queue')],
+          embeds: [infoEmbed('Nothing is currently playing.', '🎵 Now Playing')],
         });
       }
-
-      const list = queue.tracks.map((t, i) =>
-        `${i === 0 ? '🎵' : `\`${i}.\``} **[${t.title}](${t.url})** — ${t.duration} — <@${t.requestedBy.id}>`
-      ).join('\n');
 
       await InteractionHelper.safeEditReply(interaction, {
         embeds: [
           createEmbed({
-            title: '📋 Music Queue',
-            description: list,
+            title: '🎵 Now Playing',
+            description: `**[${track.title}](${track.url})**`,
             color: 'info',
-            footer: { text: `${queue.tracks.length} track${queue.tracks.length !== 1 ? 's' : ''} in queue` },
+            thumbnail: track.thumbnail,
+            fields: [
+              { name: '⏱️ Duration', value: track.duration, inline: true },
+              { name: '👤 Requested by', value: `${track.requestedBy}`, inline: true },
+            ],
             timestamp: true,
           }),
         ],
       });
     } catch (error) {
-      logger.error('Queue command error:', error);
-      await handleInteractionError(interaction, error, { subtype: 'queue_failed' });
+      logger.error('Nowplaying command error:', error);
+      await handleInteractionError(interaction, error, { subtype: 'nowplaying_failed' });
     }
   },
 };

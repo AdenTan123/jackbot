@@ -7,8 +7,11 @@ import { queues } from '../../utils/musicQueue.js';
 
 export default {
   data: new SlashCommandBuilder()
-    .setName('resume')
-    .setDescription('Resume paused playback'),
+    .setName('volume')
+    .setDescription('Set the playback volume (1-100)')
+    .addIntegerOption(o =>
+      o.setName('level').setDescription('Volume level 1-100').setRequired(true)
+        .setMinValue(1).setMaxValue(100)),
   category: 'music',
 
   async execute(interaction, config, client) {
@@ -17,15 +20,17 @@ export default {
 
     try {
       const queue = queues.get(interaction.guildId);
-      if (!queue) throw new Error('Nothing is paused.');
+      if (!queue?.isPlaying) throw new Error('Nothing is currently playing.');
 
-      queue.resume();
+      const level = interaction.options.getInteger('level');
+      queue.setVolume(level / 100);
+
       await InteractionHelper.safeEditReply(interaction, {
-        embeds: [successEmbed('Playback resumed.', '▶️ Resumed')],
+        embeds: [successEmbed(`Volume set to **${level}%**`, '🔊 Volume')],
       });
     } catch (error) {
-      logger.error('Resume command error:', error);
-      await handleInteractionError(interaction, error, { subtype: 'resume_failed' });
+      logger.error('Volume command error:', error);
+      await handleInteractionError(interaction, error, { subtype: 'volume_failed' });
     }
   },
 };

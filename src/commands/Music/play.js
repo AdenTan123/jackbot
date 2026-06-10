@@ -1,59 +1,80 @@
-const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-const { queues, MusicQueue } = require('../../utils/MusicQueue');
-const play = require('play-dl');
+import { SlashCommandBuilder } from 'discord.js';
+import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
+import { logger } from '../../utils/logger.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { handleInteractionError } from '../../utils/errorHandler.js';
+import { getOrCreateQueue, queues } from '../../utils/musicQueue.js';
 
-module.exports = {
+export default {
   data: new SlashCommandBuilder()
     .setName('play')
     .setDescription('Play a song from YouTube')
-    .addStringOption(opt =>
-      opt.setName('query').setDescription('Song name or URL').setRequired(true)),
+    .addStringOption(o =>
+      o.setName('query').setDescription('Song name or YouTube URL').setRequired(true)),
+  category: 'music',
 
-  async execute(interaction) {
-    const voiceChannel = interaction.member.voice.channel;
-    if (!voiceChannel) return interaction.reply({ content: '❌ Join a voice channel first!', ephemeral: true });
+  async execute(interaction, config, client) {
+    const deferSuccess = await InteractionHelper.safeDefer(interaction);
+    if (!deferSuccess) return;
 
-    await interaction.deferReply();
-    const query = interaction.options.getString('query');
+    try {
+      const voiceChannel = interaction.member.voice.channel;
+      if (!voiceChannel) throw new Error('You need to be in a voice channel first.');
 
-    let url;
-    if (play.yt_validate(query) === 'video') {
-      url = query;
-    } else {
-      const results = await play.search(query, { limit: 1 });
-      if (!results.length) return interaction.editReply('❌ No results found.');
-      url = results[0].url;
+      const botMember = interaction.guild.members.me;
+      const perms = voiceChannel.permissionsFor(botMember);
+      if (!perms.has('Connect') || !perms.has('Speak'))
+        throw new Error('I need **Connect** and **Speak** permissions in your voice channel.');
+
+      const query = interaction.options.getString('query');
+      const queue = getOrCreateQueue(interaction.guildId);
+
+      const track = await queue.add(query, interaction.user);
+      const wasEmpty = queue.tracks.length === 1;
+
+      if (wasEmpty) {
+        await queue.join(voiceChannel);
+        await queue.playNext(client);
+        await InteractionHelper.safeEditReply(interaction, {
+          embeds: [nowPlayingEmbed(track)],
+        });
+      } else {
+        await InteractionHelper.safeEditReply(interaction, {
+          embeds: [queuedEmbed(track, queue.tracks.length - 1)],
+        });
+      }
+    } catch (error) {
+      logger.error('Play command error:', error);
+      await handleInteractionError(interaction, error, { subtype: 'play_failed' });
     }
-
-    if (!queues.has(interaction.guildId)) queues.set(interaction.guildId, new MusicQueue());
-    const queue = queues.get(interaction.guildId);
-
-    const track = await queue.add(url, interaction.user.tag);
-    const wasEmpty = queue.queue.length === 1;
-
-    if (wasEmpty) {
-      await queue.join(voiceChannel);
-      const nowPlaying = await queue.playNext();
-      return interaction.editReply({ embeds: [nowPlayingEmbed(nowPlaying)] });
-    }
-
-    return interaction.editReply({ embeds: [queuedEmbed(track, queue.queue.length - 1)] });
-  }
+  },
 };
 
 function nowPlayingEmbed(track) {
-  return new EmbedBuilder()
-    .setColor(0x1DB954)
-    .setTitle('🎵 Now Playing')
-    .setDescription(`**[${track.title}](${track.url})**`)
-    .addFields({ name: 'Duration', value: track.duration, inline: true }, { name: 'Requested by', value: track.requestedBy, inline: true })
-    .setThumbnail(track.thumbnail);
+  return createEmbed({
+    title: '🎵 Now Playing',
+    description: `**[${track.title}](${track.url})**`,
+    color: 'success',
+    fields: [
+      { name: '⏱️ Duration', value: track.duration, inline: true },
+      { name: '👤 Requested by', value: `${track.requestedBy}`, inline: true },
+    ],
+    thumbnail: track.thumbnail,
+    timestamp: true,
+  });
 }
 
 function queuedEmbed(track, position) {
-  return new EmbedBuilder()
-    .setColor(0x5865F2)
-    .setTitle('📋 Added to Queue')
-    .setDescription(`**[${track.title}](${track.url})**`)
-    .addFields({ name: 'Position', value: `#${position}`, inline: true }, { name: 'Requested by', value: track.requestedBy, inline: true });
+  return createEmbed({
+    title: '📋 Added to Queue',
+    description: `**[${track.title}](${track.url})**`,
+    color: 'info',
+    fields: [
+      { name: '⏱️ Duration', value: track.duration, inline: true },
+      { name: '📌 Position', value: `#${position}`, inline: true },
+      { name: '👤 Requested by', value: `${track.requestedBy}`, inline: true },
+    ],
+    thumbnail: track.thumbnail,
+    timestamp: true,
+  });
 }

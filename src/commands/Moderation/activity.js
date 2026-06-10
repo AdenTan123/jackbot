@@ -158,7 +158,7 @@ async function buildUserActivityEmbed(member, user) {
         inline: true,
       },
     ],
-    footer: { text: `Requested by ${member.guild.members.cache.get(member.id)?.user?.tag ?? 'Unknown'}` },
+    footer: { text: `JackBot` },
     timestamp: true,
   });
 }
