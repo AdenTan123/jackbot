@@ -1,7 +1,6 @@
-import { SlashCommandBuilder, PermissionFlagsBits, MessageFlags } from 'discord.js';
-import { createEmbed, errorEmbed, successEmbed, infoEmbed, warningEmbed } from '../../utils/embeds.js';
+import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
 
-module.exports = {
+export default {
   data: new SlashCommandBuilder()
     .setName('massrole')
     .setDescription('Add a role to multiple users')
@@ -21,14 +20,12 @@ module.exports = {
     const role = interaction.options.getRole('role');
     const usersInput = interaction.options.getString('users');
 
-    // Extract user IDs from mentions or raw IDs
     const userIds = [...usersInput.matchAll(/\d{17,19}/g)].map(m => m[0]);
 
     if (!userIds.length) {
       return interaction.editReply('❌ No valid users found. Mention users or provide their IDs.');
     }
 
-    // Check bot has permission to assign this role
     const botMember = interaction.guild.members.me;
     if (role.position >= botMember.roles.highest.position) {
       return interaction.editReply('❌ That role is higher than my highest role. I can\'t assign it.');
