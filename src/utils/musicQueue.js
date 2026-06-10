@@ -1,5 +1,4 @@
 import { DisTube } from 'distube';
-import { YtDlpPlugin } from '@distube/yt-dlp';
 import { logger } from './logger.js';
 
 /** @type {DisTube} */
@@ -8,7 +7,6 @@ export let distube;
 export function initDistube(client) {
   distube = new DisTube(client, {
     emitNewSongOnly: true,
-    plugins: [],
   });
 
   distube.on('playSong', (queue, song) => {
