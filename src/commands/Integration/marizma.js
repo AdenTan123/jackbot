@@ -19,7 +19,7 @@ export default {
     .addSubcommand(s => s.setName('banplayer').setDescription('Ban or unban a user').addIntegerOption(o => o.setName('userid').setDescription('UserId to ban/unban').setRequired(true)).addBooleanOption(o => o.setName('banned').setDescription('Ban (true) or unban (false)').setRequired(true)))
     .addSubcommand(s => s.setName('kick').setDescription('Kick a player by UserId').addIntegerOption(o => o.setName('userid').setDescription('UserId to kick').setRequired(true)).addStringOption(o => o.setName('reason').setDescription('Optional reason')))
     .addSubcommand(s => s.setName('setbanner').setDescription('Set a server banner').addStringOption(o => o.setName('banner').setDescription('Banner text').setRequired(true)))
-    .addSubcommand(s => s.setName('startup').setDescription('Mark server as started and broadcast startup message').addUserOption(o => o.setName('cohost').setDescription('Co-host user').setRequired(true)).addUserOption(o => o.setName('host').setDescription('Host user').setRequired(false))),
+    .addSubcommand(s => s.setName('startup').setDescription('Mark server as started and broadcast startup message').addUserOption(o => o.setName('cohost').setDescription('Co-host user').setRequired(false)).addUserOption(o => o.setName('host').setDescription('Host user').setRequired(false))),
 
   async execute(interaction) {
     const deferSuccess = await InteractionHelper.safeDefer(interaction);
@@ -136,20 +136,20 @@ export default {
             return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Server shutdown initiated (30s)')] });
           }
           case 'startup': {
-            // perform setsetting hidefromlist:True (user requested)
+            // perform setsetting hidefromlist:False (user requested)
             try {
-              const sres = await api.setSetting({ HideFromList: true }, overrides);
+              const sres = await api.setSetting({ HideFromList: false }, overrides);
               logger.debug('Marizma.setSetting response (startup)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
             } catch (e) {
               logger.warn('Failed to set HideFromList on startup:', e?.message || e);
             }
 
             // get cohost and optional host
-            const cohostUser = interaction.options.getUser('cohost');
+            const cohostUser = interaction.options.getUser('cohost') || `No one`;
             const hostUser = interaction.options.getUser('host') || interaction.user;
             // attempt to set a welcoming banner for the session
             try {
-              const bannerText = '✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assitance, This Sessison Is Being Hosted By Chloe, Thank You Lovely Rp!  ✙';
+              const bannerText = `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Sessison Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
               const bres = await api.setBanner(bannerText, overrides);
               logger.debug('Marizma.setBanner response (startup)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
             } catch (e) {
@@ -183,13 +183,7 @@ export default {
                   logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
                 }
 
-                // send the welcoming WBM embed/message after purge
-                try {
-                  const wbmEmbed = createEmbed({ title: '‧₊˚ ┊WBM SESSIONS┊˚₊‧', description: `⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔\n\nWelcome to Willowbrook Memorial! We are delighted to see you join our immersive roleplay community. Take part in roleplay with us with your favourite role, either be a nurse, paramedic, a doctor, surgeon or even just a patient, you can do it all here in Willowbrook!\n\nPlease note our server is currently closed, if you had our sessions ping, you will get pinged if we have any sessions! Thank you!\n⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔` });
-                  await channel.send({ embeds: [wbmEmbed] }).catch(err => logger.warn('Failed to send WBM embed on startup:', err?.message || err));
-                } catch (wbmErr) {
-                  logger.warn('Could not send WBM embed after purge (startup):', wbmErr?.message || wbmErr);
-                }
+           
 
                 // then send the normal startup announcement
                 const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${hostUser.id}>\n\nCohost: <@${cohostUser.id}>\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
