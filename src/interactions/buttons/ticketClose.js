@@ -1,9 +1,7 @@
 import { AttachmentBuilder } from 'discord.js';
 import { createEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
-
-const CATEGORY_ID = '1514526048430198895';
-const LOG_CHANNEL_ID = '1514528044801327147';
+import { getGuildConfig } from '../../services/guildConfig.js';
 
 async function generateTranscript(channel) {
   try {
@@ -67,7 +65,11 @@ export default {
 
   async execute(interaction, client, args) {
     try {
-      if (interaction.channel.parentId !== CATEGORY_ID) {
+      const cfg = await getGuildConfig(client, interaction.guildId).catch(() => ({}));
+      const categoryId = cfg?.ticketCategoryId ?? null;
+      const logChannelId = cfg?.ticketLogChannelId ?? null;
+
+      if (categoryId && interaction.channel.parentId !== categoryId) {
         return interaction.reply({
           embeds: [createEmbed({
             title: '❌ Not a Ticket',
@@ -105,34 +107,34 @@ export default {
         })],
       });
 
-      // Generate transcript
       const transcriptText = await generateTranscript(interaction.channel);
       const transcriptFile = new AttachmentBuilder(
         Buffer.from(transcriptText, 'utf-8'),
         { name: `transcript-${interaction.channel.name}-${Date.now()}.txt` }
       );
 
-      // Log to log channel
-      try {
-        const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
-        if (logChannel) {
-          await logChannel.send({
-            embeds: [createEmbed({
-              title: '🔒 Ticket Closed',
-              color: 'error',
-              fields: [
-                { name: '📌 Channel', value: `#${interaction.channel.name}`, inline: true },
-                { name: '🔧 Closed by', value: `<@${interaction.user.id}>`, inline: true },
-                { name: '🕐 Closed at', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
-              ],
-              footer: { text: 'Transcript attached below' },
-              timestamp: true,
-            })],
-            files: [transcriptFile],
-          });
+      if (logChannelId) {
+        try {
+          const logChannel = interaction.guild.channels.cache.get(logChannelId);
+          if (logChannel) {
+            await logChannel.send({
+              embeds: [createEmbed({
+                title: '🔒 Ticket Closed',
+                color: 'error',
+                fields: [
+                  { name: '📌 Channel', value: `#${interaction.channel.name}`, inline: true },
+                  { name: '🔧 Closed by', value: `<@${interaction.user.id}>`, inline: true },
+                  { name: '🕐 Closed at', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+                ],
+                footer: { text: 'Transcript attached below' },
+                timestamp: true,
+              })],
+              files: [transcriptFile],
+            });
+          }
+        } catch (err) {
+          logger.error('Failed to log ticket close:', err);
         }
-      } catch (err) {
-        logger.error('Failed to log ticket close:', err);
       }
 
       setTimeout(async () => {

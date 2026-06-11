@@ -3,30 +3,31 @@ import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
+import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
 
-const CATEGORY_ID = '1514526048430198895';
-const LOG_CHANNEL_ID = '1514528044801327147';
+async function getTicketConfig(client, guildId) {
+  const cfg = await getGuildConfig(client, guildId).catch(() => ({}));
+  return {
+    categoryId: cfg?.ticketCategoryId ?? null,
+    logChannelId: cfg?.ticketLogChannelId ?? null,
+  };
+}
 
 async function generateTranscript(channel) {
   try {
     let allMessages = [];
     let lastId = null;
 
-    // Fetch all messages in the channel
     while (true) {
       const options = { limit: 100 };
       if (lastId) options.before = lastId;
-
       const messages = await channel.messages.fetch(options);
       if (!messages.size) break;
-
       allMessages = allMessages.concat([...messages.values()]);
       lastId = messages.last()?.id;
-
       if (messages.size < 100) break;
     }
 
-    // Sort oldest first
     allMessages.reverse();
 
     const lines = [
@@ -44,9 +45,7 @@ async function generateTranscript(channel) {
       const time = msg.createdAt.toUTCString();
       const author = `${msg.author.tag} (${msg.author.id})`;
       lines.push(`[${time}] ${author}`);
-
       if (msg.content) lines.push(`  ${msg.content}`);
-
       if (msg.embeds.length) {
         for (const embed of msg.embeds) {
           if (embed.title) lines.push(`  [Embed] ${embed.title}`);
@@ -56,13 +55,11 @@ async function generateTranscript(channel) {
           }
         }
       }
-
       if (msg.attachments.size) {
         for (const att of msg.attachments.values()) {
           lines.push(`  [Attachment] ${att.name}: ${att.url}`);
         }
       }
-
       lines.push('');
     }
 
@@ -73,11 +70,12 @@ async function generateTranscript(channel) {
   }
 }
 
-async function logToChannel(client, guild, embed, file = null) {
+async function logToChannel(guild, logChannelId, embed, file = null) {
+  if (!logChannelId) return;
   try {
-    const logChannel = guild.channels.cache.get(LOG_CHANNEL_ID);
+    const logChannel = guild.channels.cache.get(logChannelId);
     if (!logChannel) {
-      logger.warn(`Log channel ${LOG_CHANNEL_ID} not found`);
+      logger.warn(`Log channel ${logChannelId} not found in guild ${guild.id}`);
       return;
     }
     const payload = { embeds: [embed] };
@@ -92,6 +90,17 @@ export default {
   data: new SlashCommandBuilder()
     .setName('ticket')
     .setDescription('Ticket management')
+    .addSubcommand(sub => sub
+      .setName('setup')
+      .setDescription('Configure ticket settings for this server')
+      .addChannelOption(o => o
+        .setName('category')
+        .setDescription('Category to create tickets under')
+        .setRequired(true))
+      .addChannelOption(o => o
+        .setName('log_channel')
+        .setDescription('Channel to log ticket actions')
+        .setRequired(true)))
     .addSubcommand(sub => sub
       .setName('create')
       .setDescription('Create a ticket for a user')
@@ -121,14 +130,47 @@ export default {
 
     try {
 
-      // ── CREATE ──────────────────────────────────────────────
+      // ── SETUP ────────────────────────────────────────────────
+      if (sub === 'setup') {
+        const category = interaction.options.getChannel('category');
+        const logChannel = interaction.options.getChannel('log_channel');
+
+        if (category.type !== ChannelType.GuildCategory) {
+          throw new Error('The category option must be a category channel, not a text channel.');
+        }
+
+        await updateGuildConfig(client, interaction.guildId, {
+          ticketCategoryId: category.id,
+          ticketLogChannelId: logChannel.id,
+        });
+
+        return InteractionHelper.safeEditReply(interaction, {
+          embeds: [createEmbed({
+            title: '✅ Ticket System Configured',
+            color: 'success',
+            fields: [
+              { name: '📁 Category', value: category.name, inline: true },
+              { name: '📋 Log Channel', value: `<#${logChannel.id}>`, inline: true },
+            ],
+            footer: { text: 'You can now use /ticket create' },
+            timestamp: true,
+          })],
+        });
+      }
+
+      // Load per-guild config for all other subcommands
+      const { categoryId, logChannelId } = await getTicketConfig(client, interaction.guildId);
+
+      // ── CREATE ───────────────────────────────────────────────
       if (sub === 'create') {
+        if (!categoryId) throw new Error('Tickets are not set up yet. Run `/ticket setup` first.');
+
         const user = interaction.options.getUser('user');
         const creator = interaction.options.getUser('creator') || interaction.user;
         const reason = interaction.options.getString('reason') || 'No reason provided';
 
-        const category = interaction.guild.channels.cache.get(CATEGORY_ID);
-        if (!category) throw new Error(`Category \`${CATEGORY_ID}\` not found.`);
+        const category = interaction.guild.channels.cache.get(categoryId);
+        if (!category) throw new Error('Ticket category not found. Please run `/ticket setup` again.');
 
         const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
         const channelName = `ticket-${safeName}`;
@@ -136,7 +178,7 @@ export default {
         const ticketChannel = await interaction.guild.channels.create({
           name: channelName,
           type: ChannelType.GuildText,
-          parent: CATEGORY_ID,
+          parent: categoryId,
           permissionOverwrites: [
             {
               id: interaction.guild.roles.everyone.id,
@@ -183,8 +225,7 @@ export default {
           components: [row],
         });
 
-        // Log ticket creation
-        await logToChannel(client, interaction.guild, createEmbed({
+        await logToChannel(interaction.guild, logChannelId, createEmbed({
           title: '🎫 Ticket Created',
           color: 'info',
           fields: [
@@ -205,9 +246,9 @@ export default {
         });
       }
 
-      // ── BRING ───────────────────────────────────────────────
+      // ── BRING ────────────────────────────────────────────────
       else if (sub === 'bring') {
-        if (interaction.channel.parentId !== CATEGORY_ID) {
+        if (interaction.channel.parentId !== categoryId) {
           throw new Error('This command can only be used inside a ticket channel.');
         }
 
@@ -229,8 +270,7 @@ export default {
           })],
         });
 
-        // Log
-        await logToChannel(client, interaction.guild, createEmbed({
+        await logToChannel(interaction.guild, logChannelId, createEmbed({
           title: '➕ User Added to Ticket',
           color: 'info',
           fields: [
@@ -246,9 +286,9 @@ export default {
         });
       }
 
-      // ── REMOVE ──────────────────────────────────────────────
+      // ── REMOVE ───────────────────────────────────────────────
       else if (sub === 'remove') {
-        if (interaction.channel.parentId !== CATEGORY_ID) {
+        if (interaction.channel.parentId !== categoryId) {
           throw new Error('This command can only be used inside a ticket channel.');
         }
 
@@ -269,8 +309,7 @@ export default {
           })],
         });
 
-        // Log
-        await logToChannel(client, interaction.guild, createEmbed({
+        await logToChannel(interaction.guild, logChannelId, createEmbed({
           title: '➖ User Removed from Ticket',
           color: 'warning',
           fields: [
@@ -286,9 +325,9 @@ export default {
         });
       }
 
-      // ── DELETE ──────────────────────────────────────────────
+      // ── DELETE ───────────────────────────────────────────────
       else if (sub === 'delete') {
-        if (interaction.channel.parentId !== CATEGORY_ID) {
+        if (interaction.channel.parentId !== categoryId) {
           throw new Error('This command can only be used inside a ticket channel.');
         }
 
@@ -305,15 +344,13 @@ export default {
           embeds: [successEmbed('Transcript will be saved and ticket deleted in 5 seconds.', '🗑️ Deleting Ticket')],
         });
 
-        // Generate transcript before deleting
         const transcriptText = await generateTranscript(interaction.channel);
         const transcriptFile = new AttachmentBuilder(
           Buffer.from(transcriptText, 'utf-8'),
           { name: `transcript-${interaction.channel.name}-${Date.now()}.txt` }
         );
 
-        // Log with transcript
-        await logToChannel(client, interaction.guild, createEmbed({
+        await logToChannel(interaction.guild, logChannelId, createEmbed({
           title: '🗑️ Ticket Deleted',
           color: 'error',
           fields: [
