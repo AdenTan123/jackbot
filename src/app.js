@@ -3,7 +3,7 @@ import { Client, Collection, GatewayIntentBits, Partials } from 'discord.js';
 import { REST } from '@discordjs/rest';
 import express from 'express';
 import cron from 'node-cron';
-import { initDistube } from './utils/musicQueue.js';
+
 
 import config from './config/application.js';
 import { initializeDatabase } from './utils/database.js';
@@ -85,9 +85,9 @@ class TitanBot extends Client {
       
       startupLog('Logging into Discord...');
       await this.login(this.config.bot.token);
-      startupLog('Initializing DisTube...');
-initDistube(this);
-startupLog('DisTube initialized');
+   
+
+
       startupLog('Discord login successful');
       
       startupLog('Registering slash commands...');
