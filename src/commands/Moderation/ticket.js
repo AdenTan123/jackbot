@@ -1,10 +1,92 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
 
 const CATEGORY_ID = '1514526048430198895';
+const LOG_CHANNEL_ID = '1514528044801327147';
+
+async function generateTranscript(channel) {
+  try {
+    let allMessages = [];
+    let lastId = null;
+
+    // Fetch all messages in the channel
+    while (true) {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+
+      const messages = await channel.messages.fetch(options);
+      if (!messages.size) break;
+
+      allMessages = allMessages.concat([...messages.values()]);
+      lastId = messages.last()?.id;
+
+      if (messages.size < 100) break;
+    }
+
+    // Sort oldest first
+    allMessages.reverse();
+
+    const lines = [
+      `═══════════════════════════════════════`,
+      `  TICKET TRANSCRIPT — #${channel.name}`,
+      `  Category: ${channel.parent?.name ?? 'Unknown'}`,
+      `  Created: ${channel.createdAt?.toUTCString() ?? 'Unknown'}`,
+      `  Exported: ${new Date().toUTCString()}`,
+      `  Total Messages: ${allMessages.length}`,
+      `═══════════════════════════════════════`,
+      '',
+    ];
+
+    for (const msg of allMessages) {
+      const time = msg.createdAt.toUTCString();
+      const author = `${msg.author.tag} (${msg.author.id})`;
+      lines.push(`[${time}] ${author}`);
+
+      if (msg.content) lines.push(`  ${msg.content}`);
+
+      if (msg.embeds.length) {
+        for (const embed of msg.embeds) {
+          if (embed.title) lines.push(`  [Embed] ${embed.title}`);
+          if (embed.description) lines.push(`  ${embed.description}`);
+          for (const field of embed.fields ?? []) {
+            lines.push(`  ${field.name}: ${field.value}`);
+          }
+        }
+      }
+
+      if (msg.attachments.size) {
+        for (const att of msg.attachments.values()) {
+          lines.push(`  [Attachment] ${att.name}: ${att.url}`);
+        }
+      }
+
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  } catch (error) {
+    logger.error('Failed to generate transcript:', error);
+    return `Failed to generate transcript: ${error.message}`;
+  }
+}
+
+async function logToChannel(client, guild, embed, file = null) {
+  try {
+    const logChannel = guild.channels.cache.get(LOG_CHANNEL_ID);
+    if (!logChannel) {
+      logger.warn(`Log channel ${LOG_CHANNEL_ID} not found`);
+      return;
+    }
+    const payload = { embeds: [embed] };
+    if (file) payload.files = [file];
+    await logChannel.send(payload);
+  } catch (error) {
+    logger.error('Failed to log ticket action:', error);
+  }
+}
 
 export default {
   data: new SlashCommandBuilder()
@@ -88,7 +170,6 @@ export default {
           timestamp: true,
         });
 
-        // Close button — stores creatorId in customId so only they can close
         const row = new ActionRowBuilder().addComponents(
           new ButtonBuilder()
             .setCustomId(`ticket_close:${creator.id}`)
@@ -102,6 +183,20 @@ export default {
           components: [row],
         });
 
+        // Log ticket creation
+        await logToChannel(client, interaction.guild, createEmbed({
+          title: '🎫 Ticket Created',
+          color: 'info',
+          fields: [
+            { name: '📌 Channel', value: `<#${ticketChannel.id}>`, inline: true },
+            { name: '👤 User', value: `<@${user.id}>`, inline: true },
+            { name: '🙋 Creator', value: `<@${creator.id}>`, inline: true },
+            { name: '📝 Reason', value: reason, inline: false },
+            { name: '🔧 Created by', value: `<@${interaction.user.id}>`, inline: true },
+          ],
+          timestamp: true,
+        }));
+
         await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(
             `Ticket created for <@${user.id}>: <#${ticketChannel.id}>`,
@@ -112,7 +207,7 @@ export default {
 
       // ── BRING ───────────────────────────────────────────────
       else if (sub === 'bring') {
-        if (!interaction.channel.name.startsWith('ticket-')) {
+        if (interaction.channel.parentId !== CATEGORY_ID) {
           throw new Error('This command can only be used inside a ticket channel.');
         }
 
@@ -134,6 +229,18 @@ export default {
           })],
         });
 
+        // Log
+        await logToChannel(client, interaction.guild, createEmbed({
+          title: '➕ User Added to Ticket',
+          color: 'info',
+          fields: [
+            { name: '📌 Channel', value: `<#${interaction.channel.id}>`, inline: true },
+            { name: '👤 User Added', value: `<@${user.id}>`, inline: true },
+            { name: '🔧 By', value: `<@${interaction.user.id}>`, inline: true },
+          ],
+          timestamp: true,
+        }));
+
         await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(`<@${user.id}> has been added to the ticket.`, '✅ User Added')],
         });
@@ -141,7 +248,7 @@ export default {
 
       // ── REMOVE ──────────────────────────────────────────────
       else if (sub === 'remove') {
-        if (!interaction.channel.name.startsWith('ticket-')) {
+        if (interaction.channel.parentId !== CATEGORY_ID) {
           throw new Error('This command can only be used inside a ticket channel.');
         }
 
@@ -162,6 +269,18 @@ export default {
           })],
         });
 
+        // Log
+        await logToChannel(client, interaction.guild, createEmbed({
+          title: '➖ User Removed from Ticket',
+          color: 'warning',
+          fields: [
+            { name: '📌 Channel', value: `<#${interaction.channel.id}>`, inline: true },
+            { name: '👤 User Removed', value: `<@${user.id}>`, inline: true },
+            { name: '🔧 By', value: `<@${interaction.user.id}>`, inline: true },
+          ],
+          timestamp: true,
+        }));
+
         await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(`<@${user.id}> has been removed from the ticket.`, '✅ User Removed')],
         });
@@ -169,22 +288,42 @@ export default {
 
       // ── DELETE ──────────────────────────────────────────────
       else if (sub === 'delete') {
-        if (!interaction.channel.name.startsWith('ticket-')) {
+        if (interaction.channel.parentId !== CATEGORY_ID) {
           throw new Error('This command can only be used inside a ticket channel.');
         }
 
         await interaction.channel.send({
           embeds: [createEmbed({
             title: '🗑️ Ticket Closing',
-            description: `This ticket is being deleted by <@${interaction.user.id}>.\nChannel will be deleted in **5 seconds**.`,
+            description: `This ticket is being deleted by <@${interaction.user.id}>.\nGenerating transcript and deleting in **5 seconds**.`,
             color: 'error',
             timestamp: true,
           })],
         });
 
         await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed('Ticket will be deleted in 5 seconds.', '🗑️ Deleting Ticket')],
+          embeds: [successEmbed('Transcript will be saved and ticket deleted in 5 seconds.', '🗑️ Deleting Ticket')],
         });
+
+        // Generate transcript before deleting
+        const transcriptText = await generateTranscript(interaction.channel);
+        const transcriptFile = new AttachmentBuilder(
+          Buffer.from(transcriptText, 'utf-8'),
+          { name: `transcript-${interaction.channel.name}-${Date.now()}.txt` }
+        );
+
+        // Log with transcript
+        await logToChannel(client, interaction.guild, createEmbed({
+          title: '🗑️ Ticket Deleted',
+          color: 'error',
+          fields: [
+            { name: '📌 Channel', value: `#${interaction.channel.name}`, inline: true },
+            { name: '🔧 Deleted by', value: `<@${interaction.user.id}>`, inline: true },
+            { name: '🕐 Deleted at', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+          ],
+          footer: { text: 'Transcript attached below' },
+          timestamp: true,
+        }), transcriptFile);
 
         setTimeout(async () => {
           try {

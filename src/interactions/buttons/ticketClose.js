@@ -1,13 +1,85 @@
+import { AttachmentBuilder } from 'discord.js';
 import { createEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
+
+const CATEGORY_ID = '1514526048430198895';
+const LOG_CHANNEL_ID = '1514528044801327147';
+
+async function generateTranscript(channel) {
+  try {
+    let allMessages = [];
+    let lastId = null;
+
+    while (true) {
+      const options = { limit: 100 };
+      if (lastId) options.before = lastId;
+      const messages = await channel.messages.fetch(options);
+      if (!messages.size) break;
+      allMessages = allMessages.concat([...messages.values()]);
+      lastId = messages.last()?.id;
+      if (messages.size < 100) break;
+    }
+
+    allMessages.reverse();
+
+    const lines = [
+      `═══════════════════════════════════════`,
+      `  TICKET TRANSCRIPT — #${channel.name}`,
+      `  Category: ${channel.parent?.name ?? 'Unknown'}`,
+      `  Created: ${channel.createdAt?.toUTCString() ?? 'Unknown'}`,
+      `  Exported: ${new Date().toUTCString()}`,
+      `  Total Messages: ${allMessages.length}`,
+      `═══════════════════════════════════════`,
+      '',
+    ];
+
+    for (const msg of allMessages) {
+      const time = msg.createdAt.toUTCString();
+      const author = `${msg.author.tag} (${msg.author.id})`;
+      lines.push(`[${time}] ${author}`);
+      if (msg.content) lines.push(`  ${msg.content}`);
+      if (msg.embeds.length) {
+        for (const embed of msg.embeds) {
+          if (embed.title) lines.push(`  [Embed] ${embed.title}`);
+          if (embed.description) lines.push(`  ${embed.description}`);
+          for (const field of embed.fields ?? []) {
+            lines.push(`  ${field.name}: ${field.value}`);
+          }
+        }
+      }
+      if (msg.attachments.size) {
+        for (const att of msg.attachments.values()) {
+          lines.push(`  [Attachment] ${att.name}: ${att.url}`);
+        }
+      }
+      lines.push('');
+    }
+
+    return lines.join('\n');
+  } catch (error) {
+    logger.error('Failed to generate transcript:', error);
+    return `Failed to generate transcript: ${error.message}`;
+  }
+}
 
 export default {
   name: 'ticket_close',
 
   async execute(interaction, client, args) {
     try {
-      const creatorId = args[0]; // passed from customId split
+      if (interaction.channel.parentId !== CATEGORY_ID) {
+        return interaction.reply({
+          embeds: [createEmbed({
+            title: '❌ Not a Ticket',
+            description: 'This button can only be used inside a ticket channel.',
+            color: 'error',
+            timestamp: true,
+          })],
+          ephemeral: true,
+        });
+      }
 
+      const creatorId = args[0];
       const canClose =
         interaction.user.id === creatorId ||
         interaction.member.permissions.has('ManageChannels');
@@ -27,11 +99,41 @@ export default {
       await interaction.reply({
         embeds: [createEmbed({
           title: '🔒 Ticket Closing',
-          description: `Ticket closed by <@${interaction.user.id}>.\nChannel will be deleted in **5 seconds**.`,
+          description: `Ticket closed by <@${interaction.user.id}>.\nGenerating transcript and deleting in **5 seconds**.`,
           color: 'error',
           timestamp: true,
         })],
       });
+
+      // Generate transcript
+      const transcriptText = await generateTranscript(interaction.channel);
+      const transcriptFile = new AttachmentBuilder(
+        Buffer.from(transcriptText, 'utf-8'),
+        { name: `transcript-${interaction.channel.name}-${Date.now()}.txt` }
+      );
+
+      // Log to log channel
+      try {
+        const logChannel = interaction.guild.channels.cache.get(LOG_CHANNEL_ID);
+        if (logChannel) {
+          await logChannel.send({
+            embeds: [createEmbed({
+              title: '🔒 Ticket Closed',
+              color: 'error',
+              fields: [
+                { name: '📌 Channel', value: `#${interaction.channel.name}`, inline: true },
+                { name: '🔧 Closed by', value: `<@${interaction.user.id}>`, inline: true },
+                { name: '🕐 Closed at', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
+              ],
+              footer: { text: 'Transcript attached below' },
+              timestamp: true,
+            })],
+            files: [transcriptFile],
+          });
+        }
+      } catch (err) {
+        logger.error('Failed to log ticket close:', err);
+      }
 
       setTimeout(async () => {
         try {
