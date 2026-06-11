@@ -135,66 +135,68 @@ export default {
             if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Shutdown failed', res?.error || null)] });
             return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Server shutdown initiated (30s)')] });
           }
-          case 'startup': {
-            // perform setsetting hidefromlist:False (user requested)
-            try {
-              const sres = await api.setSetting({ HideFromList: false }, overrides);
-              logger.debug('Marizma.setSetting response (startup)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
-            } catch (e) {
-              logger.warn('Failed to set HideFromList on startup:', e?.message || e);
-            }
+        case 'startup': {
+  // perform setsetting hidefromlist:False
+  try {
+    const sres = await api.setSetting({ HideFromList: false }, overrides);
+    logger.debug('Marizma.setSetting response (startup)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
+  } catch (e) {
+    logger.warn('Failed to set HideFromList on startup:', e?.message || e);
+  }
 
-            // get cohost and optional host
-            const cohostUser = interaction.options.getUser('cohost') || `No one`;
-            const hostUser = interaction.options.getUser('host') || interaction.user;
-            // attempt to set a welcoming banner for the session
-            try {
-              const bannerText = `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Sessison Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
-              const bres = await api.setBanner(bannerText, overrides);
-              logger.debug('Marizma.setBanner response (startup)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
-            } catch (e) {
-              logger.warn('Failed to set banner on startup:', e?.message || e);
-            }
+  // get optional cohost and host
+  const cohostUser = interaction.options.getUser('cohost'); // may be null
+  const hostUser = interaction.options.getUser('host') || interaction.user;
 
-            // reply to the command with embed + link
-            const joinLink = 'https://www.roblox.com/games/start?placeId=8704997000&launchData=%7B%22serverCode%22%3A%22f99%2D57a%22%7D';
-            const embed = createEmbed({ title: 'Successfully Started Up Server', description: `Join Server with this link: ${joinLink}` });
-            await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+  // attempt to set a welcoming banner
+  try {
+    const bannerText = `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Session Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
+    const bres = await api.setBanner(bannerText, overrides);
+    logger.debug('Marizma.setBanner response (startup)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
+  } catch (e) {
+    logger.warn('Failed to set banner on startup:', e?.message || e);
+  }
 
-            // attempt to post announcement in target channel
-            const announceChannelId = '1507406822288654467';
-            try {
-              const channel = await interaction.client.channels.fetch(announceChannelId).catch(() => null);
-              if (channel && channel.isTextBased && channel.messages) {
-                // purge previous session messages (bulk delete in batches, respecting 14-day limit)
-                try {
-                  let fetched;
-                  do {
-                    fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-                    if (!fetched || fetched.size === 0) break;
-                    const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
-                    if (deletable.size > 0) {
-                      await channel.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure (startup):', err?.message || err));
-                    } else {
-                      break;
-                    }
-                  } while (fetched && fetched.size > 0);
-                } catch (purgeErr) {
-                  logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
-                }
+  // reply to the command with embed + link
+  const joinLink = 'https://www.roblox.com/games/start?placeId=8704997000&launchData=%7B%22serverCode%22%3A%22f99%2D57a%22%7D';
+  const embed = createEmbed({ title: 'Successfully Started Up Server', description: `Join Server with this link: ${joinLink}` });
+  await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
 
-           
-
-                // then send the normal startup announcement
-                const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${hostUser.id}>\n\nCohost: <@${cohostUser.id}>\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
-                await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
-              }
-            } catch (e) {
-              logger.warn('Could not post startup announcement:', e?.message || e);
-            }
-
-            return;
+  // post announcement in target channel
+  const announceChannelId = '1507406822288654467';
+  try {
+    const channel = await interaction.client.channels.fetch(announceChannelId).catch(() => null);
+    if (channel && channel.isTextBased && channel.messages) {
+      // purge previous session messages
+      try {
+        let fetched;
+        do {
+          fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+          if (!fetched || fetched.size === 0) break;
+          const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
+          if (deletable.size > 0) {
+            await channel.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure (startup):', err?.message || err));
+          } else {
+            break;
           }
+        } while (fetched && fetched.size > 0);
+      } catch (purgeErr) {
+        logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
+      }
+
+      // Build co-host mention safely
+      const cohostMention = cohostUser ? `<@${cohostUser.id}>` : 'None';
+
+      const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${hostUser.id}>\n\nCohost: ${cohostMention}\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
+      await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
+    }
+  } catch (e) {
+    logger.warn('Could not post startup announcement:', e?.message || e);
+  }
+
+  return;
+}
+
         case 'setsetting': {
           const HideFromList = interaction.options.getBoolean('hidefromlist');
           const Private = interaction.options.getBoolean('private');
