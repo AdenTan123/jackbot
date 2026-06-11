@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, OverwriteType } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
@@ -10,28 +10,23 @@ export default {
   data: new SlashCommandBuilder()
     .setName('ticket')
     .setDescription('Ticket management')
-
     .addSubcommand(sub => sub
       .setName('create')
       .setDescription('Create a ticket for a user')
       .addUserOption(o => o.setName('user').setDescription('User the ticket is for').setRequired(true))
       .addUserOption(o => o.setName('creator').setDescription('Person creating/assigned to the ticket (optional)'))
       .addStringOption(o => o.setName('reason').setDescription('Reason for the ticket (optional)')))
-
     .addSubcommand(sub => sub
       .setName('bring')
       .setDescription('Add a user to this ticket')
       .addUserOption(o => o.setName('user').setDescription('User to add').setRequired(true)))
-
     .addSubcommand(sub => sub
       .setName('remove')
       .setDescription('Remove a user from this ticket')
       .addUserOption(o => o.setName('user').setDescription('User to remove').setRequired(true)))
-
     .addSubcommand(sub => sub
       .setName('delete')
       .setDescription('Delete this ticket channel'))
-
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
 
   category: 'moderation',
@@ -51,9 +46,8 @@ export default {
         const reason = interaction.options.getString('reason') || 'No reason provided';
 
         const category = interaction.guild.channels.cache.get(CATEGORY_ID);
-        if (!category) throw new Error(`Category \`${CATEGORY_ID}\` not found. Please check the category ID.`);
+        if (!category) throw new Error(`Category \`${CATEGORY_ID}\` not found.`);
 
-        // Sanitize username for channel name
         const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
         const channelName = `ticket-${safeName}`;
 
@@ -63,37 +57,20 @@ export default {
           parent: CATEGORY_ID,
           permissionOverwrites: [
             {
-              // deny everyone by default
               id: interaction.guild.roles.everyone.id,
               deny: [PermissionFlagsBits.ViewChannel],
             },
             {
-              // ticket subject user
               id: user.id,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory,
-              ],
+              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
             },
             {
-              // ticket creator
               id: creator.id,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory,
-              ],
+              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
             },
             {
-              // bot itself
               id: client.user.id,
-              allow: [
-                PermissionFlagsBits.ViewChannel,
-                PermissionFlagsBits.SendMessages,
-                PermissionFlagsBits.ReadMessageHistory,
-                PermissionFlagsBits.ManageChannels,
-              ],
+              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels],
             },
           ],
         });
@@ -107,13 +84,22 @@ export default {
             { name: '🙋 Created by', value: `<@${creator.id}>`, inline: true },
             { name: '📝 Reason', value: reason, inline: false },
           ],
-          footer: { text: `Use /ticket delete to close this ticket` },
+          footer: { text: `Ticket created by ${interaction.user.tag}` },
           timestamp: true,
         });
+
+        // Close button — stores creatorId in customId so only they can close
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ticket_close:${creator.id}`)
+            .setLabel('🔒 Close Ticket')
+            .setStyle(ButtonStyle.Danger)
+        );
 
         await ticketChannel.send({
           content: `<@${user.id}> <@${creator.id}>`,
           embeds: [embed],
+          components: [row],
         });
 
         await InteractionHelper.safeEditReply(interaction, {
@@ -149,10 +135,7 @@ export default {
         });
 
         await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(
-            `<@${user.id}> has been added to the ticket.`,
-            '✅ User Added'
-          )],
+          embeds: [successEmbed(`<@${user.id}> has been added to the ticket.`, '✅ User Added')],
         });
       }
 
@@ -180,10 +163,7 @@ export default {
         });
 
         await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(
-            `<@${user.id}> has been removed from the ticket.`,
-            '✅ User Removed'
-          )],
+          embeds: [successEmbed(`<@${user.id}> has been removed from the ticket.`, '✅ User Removed')],
         });
       }
 
