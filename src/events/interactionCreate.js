@@ -29,6 +29,7 @@ export default {
       try {
         InteractionHelper.patchInteractionResponses(interaction);
 
+        // ── CHAT INPUT COMMAND ─────────────────────────────────
         if (interaction.isChatInputCommand()) {
           try {
             logger.info(`Command executed: /${interaction.commandName} by ${interaction.user.tag}`, {
@@ -86,7 +87,6 @@ export default {
               }
             }
 
-            // Enforce per-command role permissions if configured
             if (interaction.guild && guildConfig) {
               try {
                 const perms = guildConfig.commandPermissions || {};
@@ -119,163 +119,94 @@ export default {
               commandName: interaction.commandName
             }, interactionTraceContext));
           }
-        } } else if (interaction.isAutocomplete()) {
-  const focusedOption = interaction.options.getFocused(true);
 
-  // Generic autocomplete routing — calls command.autocomplete() if it exists
-  const command = client.commands.get(interaction.commandName);
-  if (command?.autocomplete) {
-    try {
-      const guildConfig = interaction.guild
-        ? await getGuildConfig(client, interaction.guild.id, interactionTraceContext)
-        : null;
-      await command.autocomplete(interaction, guildConfig, client);
-      return;
-    } catch (error) {
-      logger.error(`Autocomplete error for ${interaction.commandName}:`, error);
-      await interaction.respond([]).catch(() => {});
-      return;
-    }
-  }
+        // ── AUTOCOMPLETE ───────────────────────────────────────
+        } else if (interaction.isAutocomplete()) {
+          const command = client.commands.get(interaction.commandName);
 
-  // Legacy: reactroles specific handler
-  if (interaction.commandName === 'reactroles' && focusedOption.name === 'panel') {
-    try {
-      const { getAllReactionRoleMessages, deleteReactionRoleMessage } = await import('../services/reactionRoleService.js');
-      const guildId = interaction.guildId;
-      const guild = interaction.guild;
-      
-      let panels = await getAllReactionRoleMessages(client, guildId);
-      
-      if (!panels || panels.length === 0) {
-        await interaction.respond([]);
-        return;
-      }
-      
-      const validPanels = [];
-      for (const panel of panels) {
-        if (!panel.messageId || !panel.channelId) continue;
-        const channel = guild.channels.cache.get(panel.channelId);
-        if (!channel) {
-          await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
-          continue;
-        }
-        const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
-        if (!msg) {
-          await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
-          continue;
-        }
-        validPanels.push(panel);
-      }
-      
-      if (validPanels.length === 0) {
-        await interaction.respond([]);
-        return;
-      }
-      
-      const choices = await Promise.all(
-        validPanels.slice(0, 25).map(async panel => {
-          try {
-            const channel = guild.channels.cache.get(panel.channelId);
-            if (!channel) return null;
-            const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
-            if (!msg) return null;
-            const title = msg?.embeds?.[0]?.title ?? 'Untitled Panel';
-            const channelName = channel?.name ?? 'unknown';
-            return {
-              name: `${title} (${channelName})`.substring(0, 100),
-              value: panel.messageId
-            };
-          } catch (e) {
-            return null;
-          }
-        })
-      );
-      
-      const validChoices = choices.filter(c => c !== null);
-      await interaction.respond(validChoices);
-    } catch (error) {
-      logger.error('Error handling reactroles autocomplete:', {
-        error: error.message,
-        guildId: interaction.guildId,
-        commandName: interaction.commandName
-      });
-      await interaction.respond([]);
-    }
-  }
-          
-          if (interaction.commandName === 'reactroles' && focusedOption.name === 'panel') {
+          // Generic routing — if command has autocomplete() method, use it
+          if (command?.autocomplete) {
             try {
-              const { getAllReactionRoleMessages, deleteReactionRoleMessage } = await import('../services/reactionRoleService.js');
-              const guildId = interaction.guildId;
-              const guild = interaction.guild;
-              
-              let panels = await getAllReactionRoleMessages(client, guildId);
-              
-              if (!panels || panels.length === 0) {
-                await interaction.respond([]);
-                return;
-              }
-              
-              // Filter out panels whose messages no longer exist
-              const validPanels = [];
-              for (const panel of panels) {
-                if (!panel.messageId || !panel.channelId) {
-                  continue;
-                }
-                
-                const channel = guild.channels.cache.get(panel.channelId);
-                if (!channel) {
-                  await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
-                  continue;
-                }
-                
-                const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
-                if (!msg) {
-                  await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
-                  continue;
-                }
-                validPanels.push(panel);
-              }
-              
-              if (validPanels.length === 0) {
-                await interaction.respond([]);
-                return;
-              }
-              
-              const choices = await Promise.all(
-                validPanels.slice(0, 25).map(async panel => {
-                  try {
-                    const channel = guild.channels.cache.get(panel.channelId);
-                    if (!channel) return null;
-                    
-                    const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
-                    if (!msg) return null;
-                    
-                    const title = msg?.embeds?.[0]?.title ?? 'Untitled Panel';
-                    const channelName = channel?.name ?? 'unknown';
-                    
-                    return {
-                      name: `${title} (${channelName})`.substring(0, 100),
-                      value: panel.messageId
-                    };
-                  } catch (e) {
-                    return null;
-                  }
-                })
-              );
-              
-              const validChoices = choices.filter(c => c !== null);
-              await interaction.respond(validChoices);
+              const guildConfig = interaction.guild
+                ? await getGuildConfig(client, interaction.guild.id, interactionTraceContext)
+                : null;
+              await command.autocomplete(interaction, guildConfig, client);
             } catch (error) {
-              logger.error('Error handling reactroles autocomplete:', {
-                error: error.message,
-                guildId: interaction.guildId,
-                commandName: interaction.commandName
-              });
-              await interaction.respond([]);
+              logger.error(`Autocomplete error for ${interaction.commandName}:`, error);
+              await interaction.respond([]).catch(() => {});
+            }
+            return;
+          }
+
+          // Legacy: reactroles specific handler
+          if (interaction.commandName === 'reactroles') {
+            const focusedOption = interaction.options.getFocused(true);
+            if (focusedOption.name === 'panel') {
+              try {
+                const { getAllReactionRoleMessages, deleteReactionRoleMessage } = await import('../services/reactionRoleService.js');
+                const guildId = interaction.guildId;
+                const guild = interaction.guild;
+
+                let panels = await getAllReactionRoleMessages(client, guildId);
+
+                if (!panels || panels.length === 0) {
+                  await interaction.respond([]);
+                  return;
+                }
+
+                const validPanels = [];
+                for (const panel of panels) {
+                  if (!panel.messageId || !panel.channelId) continue;
+                  const channel = guild.channels.cache.get(panel.channelId);
+                  if (!channel) {
+                    await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
+                    continue;
+                  }
+                  const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
+                  if (!msg) {
+                    await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
+                    continue;
+                  }
+                  validPanels.push(panel);
+                }
+
+                if (validPanels.length === 0) {
+                  await interaction.respond([]);
+                  return;
+                }
+
+                const choices = await Promise.all(
+                  validPanels.slice(0, 25).map(async panel => {
+                    try {
+                      const channel = guild.channels.cache.get(panel.channelId);
+                      if (!channel) return null;
+                      const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
+                      if (!msg) return null;
+                      const title = msg?.embeds?.[0]?.title ?? 'Untitled Panel';
+                      const channelName = channel?.name ?? 'unknown';
+                      return {
+                        name: `${title} (${channelName})`.substring(0, 100),
+                        value: panel.messageId
+                      };
+                    } catch (e) {
+                      return null;
+                    }
+                  })
+                );
+
+                await interaction.respond(choices.filter(c => c !== null));
+              } catch (error) {
+                logger.error('Error handling reactroles autocomplete:', {
+                  error: error.message,
+                  guildId: interaction.guildId,
+                  commandName: interaction.commandName
+                });
+                await interaction.respond([]);
+              }
             }
           }
+
+        // ── BUTTON ─────────────────────────────────────────────
         } else if (interaction.isButton()) {
           if (interaction.customId.startsWith('shared_todo_')) {
             const parts = interaction.customId.split('_');
@@ -311,7 +242,6 @@ export default {
             if (!interaction.customId.includes(':')) {
               return;
             }
-
             throw createError(
               `No button handler found for ${customId}`,
               ErrorTypes.CONFIGURATION,
@@ -329,18 +259,16 @@ export default {
               handler: 'general'
             }, interactionTraceContext));
           }
+
+        // ── SELECT MENU ────────────────────────────────────────
         } else if (interaction.isStringSelectMenu()) {
           const [customId, ...args] = interaction.customId.split(':');
           const selectMenu = client.selectMenus.get(customId);
 
           if (!selectMenu) {
             if (!interaction.customId.includes(':')) {
-              // No registered handler and no ':' delimiter — this is an inline-collected
-              // select menu (e.g. ticket_config_<guildId>, jointocreate_config_<id>).
-              // Return silently so the existing MessageComponentCollector handles it.
               return;
             }
-
             throw createError(
               `No select menu handler found for ${customId}`,
               ErrorTypes.CONFIGURATION,
@@ -357,6 +285,8 @@ export default {
               customId: interaction.customId
             }, interactionTraceContext));
           }
+
+        // ── MODAL ──────────────────────────────────────────────
         } else if (interaction.isModalSubmit()) {
           if (interaction.customId.startsWith('jtc_')) {
             logger.debug(`Skipping modal handler lookup for inline-awaited modal: ${interaction.customId}`, {
@@ -371,11 +301,8 @@ export default {
 
           if (!modal) {
             if (!interaction.customId.includes(':')) {
-              // No registered handler and no ':' delimiter — this is an inline-awaited
-              // modal (e.g. via awaitModalSubmit). Return silently so the caller handles it.
               return;
             }
-
             throw createError(
               `No modal handler found for ${customId}`,
               ErrorTypes.CONFIGURATION,
@@ -394,6 +321,7 @@ export default {
             }, interactionTraceContext));
           }
         }
+
       } catch (error) {
         logger.error('Unhandled error in interactionCreate:', {
           event: 'interaction.unhandled_error',
