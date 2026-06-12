@@ -32,7 +32,7 @@ async function getAllFiles(directory, fileList = []) {
   for (const file of files) {
     const filePath = path.join(directory, file.name);
     if (file.isDirectory()) {
-      if (file.name === 'modules') continue;
+      if (file.name === 'modules' || file.name === 'marizmamodalssetup') continue;
       await getAllFiles(filePath, fileList);
     } else if (file.name.endsWith('.js')) {
       fileList.push(filePath);
