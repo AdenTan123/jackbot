@@ -122,9 +122,7 @@ export default {
             .setStyle(TextInputStyle.Paragraph)
             .setRequired(false)
             .setValue(existingMarizma.ssuMessage || '')
-           .setPlaceholder(
-  'Placeholders: {host} {cohost} {code} {link} {role}\nExample: # Server Start Up!\n{role}\nHost: {host}\nCode: {code}'
-)
+           .setPlaceholder('{host} {cohost} {code} {link} {role}')
             .setMaxLength(1500)
         )
       );
