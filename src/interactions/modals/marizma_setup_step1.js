@@ -89,9 +89,7 @@ export default {
             .setStyle(TextInputStyle.Paragraph)
             .setRequired(false)
             .setValue(existingMarizma.bannerTemplate || '')
-            .setPlaceholder(
-              'Use {host} = host name, {cohost} = co-host name.\nExample: ✙ Welcome! Hosted by {host} & {cohost} ✙'
-            )
+            .setPlaceholder('Example: Hosted by {host} & {cohost}')
             .setMaxLength(512)
         ),
 
@@ -113,9 +111,7 @@ export default {
             .setStyle(TextInputStyle.Paragraph)
             .setRequired(false)
             .setValue(existingMarizma.sessionBody || '')
-            .setPlaceholder(
-              'Placeholders: {host} {cohost} {code} {link}\nExample: Host: {host}\nCohost: {cohost}\nCode: {code}'
-            )
+           .setPlaceholder('{host} {cohost} {code} {link}')
             .setMaxLength(1500)
         ),
 
@@ -126,9 +122,9 @@ export default {
             .setStyle(TextInputStyle.Paragraph)
             .setRequired(false)
             .setValue(existingMarizma.ssuMessage || '')
-            .setPlaceholder(
-              'Placeholders: {host} {cohost} {code} {link} {role}\nExample: # Server Start Up!\n{role}\nHost: {host}\nCode: {code}'
-            )
+           .setPlaceholder(
+  'Placeholders: {host} {cohost} {code} {link} {role}\nExample: # Server Start Up!\n{role}\nHost: {host}\nCode: {code}'
+)
             .setMaxLength(1500)
         )
       );
