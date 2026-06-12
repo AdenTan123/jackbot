@@ -38,6 +38,9 @@ class TitanBot extends Client {
     this.cooldowns = new Collection();
 
     this.db = null;
+
+    // 🔒 IMPORTANT: prevent double registration
+    this.commandsRegistered = false;
   }
 
   // ─────────────────────────────────────────────
@@ -64,9 +67,6 @@ class TitanBot extends Client {
       startupLog('Starting web server...');
       this.startWebServer();
 
-      // ─────────────────────────────
-      // LOAD COMMANDS (NO REGISTER HERE)
-      // ─────────────────────────────
       startupLog('Loading commands...');
       await loadCommands(this);
       startupLog(`Commands loaded: ${this.commands.size}`);
@@ -81,19 +81,30 @@ class TitanBot extends Client {
       startupLog('Discord login successful');
 
       // ─────────────────────────────
-      // REGISTER COMMANDS (ONLY HERE)
+      // ONLY RUN ONCE (READY SAFE)
       // ─────────────────────────────
-      startupLog('Registering slash commands...');
-      await this.registerCommands();
-      startupLog('Slash commands registration complete');
+      this.once('ready', async () => {
+        try {
+          if (this.commandsRegistered) return;
+          this.commandsRegistered = true;
 
-      const handlerSummary = `${this.buttons.size} buttons, ${this.selectMenus.size} menus, ${this.modals.size} modals`;
+          startupLog('Registering slash commands...');
+          await this.registerCommands();
+          startupLog('Slash commands registration complete');
 
-      startupLog(
-        `ONLINE ✅ | ${this.commands.size} commands loaded | ${handlerSummary}`
-      );
+          const handlerSummary =
+            `${this.buttons.size} buttons, ${this.selectMenus.size} menus, ${this.modals.size} modals`;
 
-      this.setupCronJobs();
+          startupLog(
+            `ONLINE ✅ | ${this.commands.size} commands loaded | ${handlerSummary}`
+          );
+
+          this.setupCronJobs();
+
+        } catch (err) {
+          logger.error('Command registration failed:', err);
+        }
+      });
 
     } catch (error) {
       logger.error('Failed to start bot:', error);
@@ -102,7 +113,7 @@ class TitanBot extends Client {
   }
 
   // ─────────────────────────────────────────────
-  // COMMAND REGISTRATION (ONLY SOURCE OF TRUTH)
+  // COMMAND REGISTRATION (SINGLE SOURCE OF TRUTH)
   // ─────────────────────────────────────────────
   async registerCommands() {
     try {
@@ -120,11 +131,17 @@ class TitanBot extends Client {
         logger.info(`Registering ${commands.length} guild commands...`);
 
         const guild = await this.guilds.fetch(guildId);
+
+        // 🔥 CLEAN OLD COMMANDS FIRST (prevents duplicates forever)
+        await guild.commands.set([]);
+
         await guild.commands.set(commands);
 
         logger.info('Guild commands registered successfully');
       } else {
         logger.info(`Registering ${commands.length} global commands...`);
+
+        await this.application.commands.set([]);
 
         await this.application.commands.set(commands);
 
@@ -162,7 +179,7 @@ class TitanBot extends Client {
   }
 
   // ─────────────────────────────────────────────
-  // WEB SERVER (UNCHANGED)
+  // WEB SERVER
   // ─────────────────────────────────────────────
   startWebServer() {
     const app = express();
