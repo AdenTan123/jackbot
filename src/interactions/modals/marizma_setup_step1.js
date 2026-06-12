@@ -143,7 +143,8 @@ export default {
 
     } catch (error) {
       logger.error('=== MARIZMA STEP 1 ERROR ===');
-      logger.error(error);
+     logger.error(error?.stack || error);
+console.error(error?.stack || error);
 
       try {
         if (!interaction.replied && !interaction.deferred) {
