@@ -107,6 +107,11 @@ class TitanBot extends Client {
         if (command.data?.toJSON) commands.push(command.data.toJSON());
       }
 
+      if (commands.length === 0) {
+        logger.warn('No commands to register!');
+        return;
+      }
+
       const guildId = this.config.bot.guildId;
 
       if (guildId) {
@@ -114,29 +119,25 @@ class TitanBot extends Client {
         logger.info(`Registering ${commands.length} guild commands to ${guildId}...`);
         const guild = await this.guilds.fetch(guildId);
 
-        // Clear guild commands first to prevent duplicates
-        await guild.commands.set([]);
-        await guild.commands.set(commands);
-        logger.info('✅ Guild commands registered');
+        // Replace all commands atomically - Discord.js handles deduplication
+        const registered = await guild.commands.set(commands);
+        logger.info(`✅ Guild commands registered: ${registered.length} commands`);
 
-        // Always clear global commands to prevent duplicates
-        // Safe to run every deploy — does nothing if already empty
-        logger.info('Clearing any stale global commands...');
+        // Clear global commands (they take longer to propagate)
+        logger.info('Clearing global commands...');
         await this.application.commands.set([]);
         logger.info('✅ Global commands cleared');
 
       } else {
         // ── GLOBAL REGISTRATION ────────────────
         logger.info(`Registering ${commands.length} global commands...`);
-
-        // Clear first to prevent duplicates
-        await this.application.commands.set([]);
-        await this.application.commands.set(commands);
-        logger.info('✅ Global commands registered');
+        const registered = await this.application.commands.set(commands);
+        logger.info(`✅ Global commands registered: ${registered.length} commands`);
       }
 
     } catch (error) {
       logger.error('Error registering commands:', error);
+      throw error; // Re-throw so it's not silently swallowed
     }
   }
 
