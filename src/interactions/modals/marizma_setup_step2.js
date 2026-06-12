@@ -1,6 +1,5 @@
-import { MessageFlags } from 'discord.js';
 import { updateGuildConfig, getGuildConfig } from '../../services/guildConfig.js';
-import { createEmbed } from '../../utils/embeds.js';
+import { MessageFlags } from 'discord.js';
 import { logger } from '../../utils/logger.js';
 
 export default {
@@ -8,75 +7,37 @@ export default {
 
   async execute(interaction, client) {
     try {
-      const bannerTemplate = interaction.fields.getTextInputValue('marizma_banner_template').trim() || null;
-      const sessionTitle = interaction.fields.getTextInputValue('marizma_session_title').trim() || null;
-      const sessionBody = interaction.fields.getTextInputValue('marizma_session_body').trim() || null;
-      const ssuMessage = interaction.fields.getTextInputValue('marizma_ssu_message').trim() || null;
+      const banner = interaction.fields.getTextInputValue('marizma_banner_template');
+      const title = interaction.fields.getTextInputValue('marizma_session_title');
+      const body = interaction.fields.getTextInputValue('marizma_session_body');
+      const ssu = interaction.fields.getTextInputValue('marizma_ssu_message');
 
       const existing = await getGuildConfig(client, interaction.guildId).catch(() => ({}));
-      const existingMarizma = existing?.marizma ?? {};
 
       await updateGuildConfig(client, interaction.guildId, {
         marizma: {
-          ...existingMarizma,
-          ...(bannerTemplate ? { bannerTemplate } : {}),
-          ...(sessionTitle ? { sessionTitle } : {}),
-          ...(sessionBody ? { sessionBody } : {}),
-          ...(ssuMessage ? { ssuMessage } : {}),
+          ...existing.marizma,
+          bannerTemplate: banner,
+          sessionTitle: title,
+          sessionBody: body,
+          ssuMessage: ssu,
         },
       });
 
       await interaction.reply({
-        embeds: [createEmbed({
-          title: '✅ Marizma Setup Complete',
-          color: 'success',
-          fields: [
-            {
-              name: '🎫 Banner Template',
-              value: bannerTemplate
-                ? `\`\`\`${bannerTemplate.slice(0, 200)}\`\`\``
-                : '*(unchanged)*',
-              inline: false,
-            },
-            {
-              name: '📋 Session Embed Title',
-              value: sessionTitle || '*(unchanged)*',
-              inline: true,
-            },
-            {
-              name: '📝 Session Body',
-              value: sessionBody
-                ? `${sessionBody.slice(0, 100)}${sessionBody.length > 100 ? '...' : ''}`
-                : '*(unchanged)*',
-              inline: false,
-            },
-            {
-              name: '📣 SSU Message',
-              value: ssuMessage
-                ? `${ssuMessage.slice(0, 100)}${ssuMessage.length > 100 ? '...' : ''}`
-                : '*(unchanged)*',
-              inline: false,
-            },
-            {
-              name: '💡 Available Placeholders',
-              value: '`{host}` `{cohost}` `{code}` `{link}` `{role}`',
-              inline: false,
-            },
-          ],
-          footer: { text: 'Run /setup view to see full config' },
-          timestamp: true,
-        })],
+        content: '✅ Setup complete (2/2)! System is now configured.',
         flags: MessageFlags.Ephemeral,
       });
 
     } catch (error) {
-      logger.error('Marizma setup step 2 modal error:', error);
-      try {
+      logger.error(error);
+
+      if (!interaction.replied) {
         await interaction.reply({
-          content: '❌ Failed to save session config. Please try again.',
+          content: '❌ Failed Step 2 setup.',
           flags: MessageFlags.Ephemeral,
         });
-      } catch {}
+      }
     }
-  }
+  },
 };
