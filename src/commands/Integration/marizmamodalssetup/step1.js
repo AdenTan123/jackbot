@@ -1,6 +1,6 @@
 import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
-import { updateGuildConfig, getGuildConfig } from '../../../services/guildConfig.js';
-import { logger } from '../../../utils/logger.js';
+import { updateGuildConfig, getGuildConfig } from '../../services/guildConfig.js';
+import { logger } from '../../utils/logger.js';
 
 export default {
   name: 'marizma_setup_step1',

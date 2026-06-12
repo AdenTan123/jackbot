@@ -1,7 +1,7 @@
 import { MessageFlags } from 'discord.js';
-import { updateGuildConfig, getGuildConfig } from '../../../services/guildConfig.js';
-import { createEmbed } from '../../../utils/embeds.js';
-import { logger } from '../../../utils/logger.js';
+import { updateGuildConfig, getGuildConfig } from '../../services/guildConfig.js';
+import { createEmbed } from '../../utils/embeds.js';
+import { logger } from '../../utils/logger.js';
 
 export default {
   name: 'marizma_setup_step2',
