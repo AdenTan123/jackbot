@@ -28,7 +28,7 @@ const appConfig = {
     ...botConfig,
     token: process.env.DISCORD_TOKEN || process.env.TOKEN,
     clientId: process.env.CLIENT_ID,
-    guildId: null,
+    guildId: process.env.GUILD_ID,
 
     shop: {
       ...botConfig.shop,
