@@ -9,7 +9,6 @@ import { getServerCounters, saveServerCounters, updateCounter } from './services
 import { logger, startupLog, shutdownLog } from './utils/logger.js';
 import { checkBirthdays } from './services/birthdayService.js';
 import { checkGiveaways } from './services/giveawayService.js';
-
 import { loadCommands } from './handlers/commandLoader.js';
 
 class TitanBot extends Client {
@@ -29,27 +28,22 @@ class TitanBot extends Client {
     });
 
     this.config = config;
-
     this.commands = new Collection();
     this.events = new Collection();
     this.buttons = new Collection();
     this.selectMenus = new Collection();
     this.modals = new Collection();
     this.cooldowns = new Collection();
-
     this.db = null;
-
-    // 🔒 IMPORTANT: prevent double registration
     this.commandsRegistered = false;
   }
 
   // ─────────────────────────────────────────────
-  // START BOT
+  // START
   // ─────────────────────────────────────────────
   async start() {
     try {
       startupLog('Starting JackBot...');
-
       await new Promise(r => setTimeout(r, 1000));
 
       startupLog('Initializing database...');
@@ -57,7 +51,6 @@ class TitanBot extends Client {
       this.db = dbInstance.db;
 
       const dbStatus = this.db.getStatus();
-
       if (dbStatus.isDegraded) {
         logger.warn('⚠️ DATABASE RUNNING IN DEGRADED MODE');
       } else {
@@ -77,12 +70,8 @@ class TitanBot extends Client {
 
       startupLog('Logging into Discord...');
       await this.login(this.config.bot.token);
-
       startupLog('Discord login successful');
 
-      // ─────────────────────────────
-      // ONLY RUN ONCE (READY SAFE)
-      // ─────────────────────────────
       this.once('ready', async () => {
         try {
           if (this.commandsRegistered) return;
@@ -94,13 +83,9 @@ class TitanBot extends Client {
 
           const handlerSummary =
             `${this.buttons.size} buttons, ${this.selectMenus.size} menus, ${this.modals.size} modals`;
-
-          startupLog(
-            `ONLINE ✅ | ${this.commands.size} commands loaded | ${handlerSummary}`
-          );
+          startupLog(`ONLINE ✅ | ${this.commands.size} commands loaded | ${handlerSummary}`);
 
           this.setupCronJobs();
-
         } catch (err) {
           logger.error('Command registration failed:', err);
         }
@@ -113,39 +98,41 @@ class TitanBot extends Client {
   }
 
   // ─────────────────────────────────────────────
-  // COMMAND REGISTRATION (SINGLE SOURCE OF TRUTH)
+  // COMMAND REGISTRATION
   // ─────────────────────────────────────────────
   async registerCommands() {
     try {
       const commands = [];
-
       for (const command of this.commands.values()) {
-        if (command.data?.toJSON) {
-          commands.push(command.data.toJSON());
-        }
+        if (command.data?.toJSON) commands.push(command.data.toJSON());
       }
 
       const guildId = this.config.bot.guildId;
 
       if (guildId) {
-        logger.info(`Registering ${commands.length} guild commands...`);
-
+        // ── GUILD REGISTRATION ─────────────────
+        logger.info(`Registering ${commands.length} guild commands to ${guildId}...`);
         const guild = await this.guilds.fetch(guildId);
 
-        // 🔥 CLEAN OLD COMMANDS FIRST (prevents duplicates forever)
+        // Clear guild commands first to prevent duplicates
         await guild.commands.set([]);
-
         await guild.commands.set(commands);
+        logger.info('✅ Guild commands registered');
 
-        logger.info('Guild commands registered successfully');
+        // Always clear global commands to prevent duplicates
+        // Safe to run every deploy — does nothing if already empty
+        logger.info('Clearing any stale global commands...');
+        await this.application.commands.set([]);
+        logger.info('✅ Global commands cleared');
+
       } else {
+        // ── GLOBAL REGISTRATION ────────────────
         logger.info(`Registering ${commands.length} global commands...`);
 
+        // Clear first to prevent duplicates
         await this.application.commands.set([]);
-
         await this.application.commands.set(commands);
-
-        logger.info('Global commands registered successfully');
+        logger.info('✅ Global commands registered');
       }
 
     } catch (error) {
@@ -159,14 +146,13 @@ class TitanBot extends Client {
   async loadHandlers() {
     const handlers = [
       { path: 'events', required: true },
-      { path: 'interactions', required: true }
+      { path: 'interactions', required: true },
     ];
 
     for (const handler of handlers) {
       try {
         const module = await import(`./handlers/${handler.path}.js`);
         const fn = module.default;
-
         if (typeof fn === 'function') {
           await fn(this);
           logger.info(`Loaded ${handler.path}`);
@@ -183,13 +169,16 @@ class TitanBot extends Client {
   // ─────────────────────────────────────────────
   startWebServer() {
     const app = express();
-    const port = this.config.api?.port || 3000;
+    const port = this.config.api?.port || process.env.PORT || 3000;
 
-    app.get('/health', (req, res) => {
-      res.json({ status: 'ok' });
+    app.get('/health', (req, res) => res.json({ status: 'ok', uptime: process.uptime() }));
+    app.get('/ready', (req, res) => {
+      if (this.isReady()) return res.json({ ready: true });
+      res.status(503).json({ ready: false });
     });
+    app.get('/', (req, res) => res.json({ message: 'JackBot Online', timestamp: new Date().toISOString() }));
 
-    app.listen(port, () => {
+    app.listen(port, '0.0.0.0', () => {
       startupLog(`Web server running on port ${port}`);
     });
   }
@@ -200,6 +189,7 @@ class TitanBot extends Client {
   setupCronJobs() {
     cron.schedule('0 6 * * *', () => checkBirthdays(this));
     cron.schedule('* * * * *', () => checkGiveaways(this));
+    cron.schedule('*/15 * * * *', () => this.updateAllCounters());
   }
 
   // ─────────────────────────────────────────────
@@ -207,17 +197,13 @@ class TitanBot extends Client {
   // ─────────────────────────────────────────────
   async updateAllCounters() {
     if (!this.db) return;
-
     for (const [guildId, guild] of this.guilds.cache) {
       try {
         const counters = await getServerCounters(this, guildId);
-
         const valid = [];
         const orphaned = [];
-
         for (const counter of counters) {
           const channel = guild.channels.cache.get(counter.channelId);
-
           if (channel) {
             valid.push(counter);
             await updateCounter(this, guild, counter);
@@ -225,11 +211,7 @@ class TitanBot extends Client {
             orphaned.push(counter);
           }
         }
-
-        if (orphaned.length) {
-          await saveServerCounters(this, guildId, valid);
-        }
-
+        if (orphaned.length) await saveServerCounters(this, guildId, valid);
       } catch (err) {
         logger.error(`Counter error ${guildId}:`, err);
       }
@@ -241,19 +223,12 @@ class TitanBot extends Client {
   // ─────────────────────────────────────────────
   async shutdown(reason = 'UNKNOWN') {
     shutdownLog(`Shutting down (${reason})`);
-
     try {
       cron.getTasks().forEach(t => t.stop());
-
-      if (this.db?.db?.pool) {
-        await this.db.db.pool.end();
-      }
-
-      this.destroy();
-
+      if (this.db?.db?.pool) await this.db.db.pool.end();
+      if (this.isReady()) this.destroy();
       shutdownLog('Shutdown complete');
       process.exit(0);
-
     } catch (error) {
       logger.error('Shutdown error:', error);
       process.exit(1);
@@ -268,14 +243,8 @@ const bot = new TitanBot();
 
 process.on('SIGINT', () => bot.shutdown('SIGINT'));
 process.on('SIGTERM', () => bot.shutdown('SIGTERM'));
-
-process.on('unhandledRejection', (reason) => {
-  logger.error('Unhandled Rejection:', reason);
-});
-
-process.on('uncaughtException', (err) => {
-  logger.error('Uncaught Exception:', err);
-});
+process.on('unhandledRejection', (reason) => logger.error('Unhandled Rejection:', reason));
+process.on('uncaughtException', (err) => logger.error('Uncaught Exception:', err));
 
 bot.start();
 
