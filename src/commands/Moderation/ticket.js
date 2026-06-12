@@ -93,20 +93,15 @@ export default {
     .addSubcommand(sub => sub
       .setName('setup')
       .setDescription('Configure ticket settings for this server')
-      .addChannelOption(o => o
-        .setName('category')
-        .setDescription('Category to create tickets under')
-        .setRequired(true))
-      .addChannelOption(o => o
-        .setName('log_channel')
-        .setDescription('Channel to log ticket actions')
-        .setRequired(true)))
+      .addChannelOption(o => o.setName('category').setDescription('Category to create tickets under').setRequired(true))
+      .addChannelOption(o => o.setName('log_channel').setDescription('Channel to log ticket actions').setRequired(true)))
     .addSubcommand(sub => sub
       .setName('create')
-      .setDescription('Create a ticket for a user')
-      .addUserOption(o => o.setName('user').setDescription('User the ticket is for').setRequired(true))
-      .addUserOption(o => o.setName('creator').setDescription('Person creating/assigned to the ticket (optional)'))
-      .addStringOption(o => o.setName('reason').setDescription('Reason for the ticket (optional)')))
+      .setDescription('Create a ticket for a user or role')
+      .addUserOption(o => o.setName('user').setDescription('User to add to the ticket').setRequired(false))
+      .addRoleOption(o => o.setName('role').setDescription('Role to add to the ticket (adds all role members)').setRequired(false))
+      .addUserOption(o => o.setName('creator').setDescription('Person assigned to the ticket').setRequired(false))
+      .addStringOption(o => o.setName('reason').setDescription('Reason for the ticket').setRequired(false)))
     .addSubcommand(sub => sub
       .setName('bring')
       .setDescription('Add a user to this ticket')
@@ -130,7 +125,9 @@ export default {
 
     try {
 
-      // ── SETUP ────────────────────────────────────────────────
+      // ═══════════════════════════════════════════════════════════
+      // SETUP
+      // ═══════════════════════════════════════════════════════════
       if (sub === 'setup') {
         const category = interaction.options.getChannel('category');
         const logChannel = interaction.options.getChannel('log_channel');
@@ -161,50 +158,88 @@ export default {
       // Load per-guild config for all other subcommands
       const { categoryId, logChannelId } = await getTicketConfig(client, interaction.guildId);
 
-      // ── CREATE ───────────────────────────────────────────────
+      // ═══════════════════════════════════════════════════════════
+      // CREATE
+      // ═══════════════════════════════════════════════════════════
       if (sub === 'create') {
-        if (!categoryId) throw new Error('Tickets are not set up yet. Run `/ticket setup` first.');
+        if (!categoryId) {
+          throw new Error('Tickets are not set up yet. Run `/ticket setup` first.');
+        }
 
         const user = interaction.options.getUser('user');
+        const role = interaction.options.getRole('role');
+
+        if (!user && !role) {
+          throw new Error('You must provide either a user or a role.');
+        }
+
         const creator = interaction.options.getUser('creator') || interaction.user;
         const reason = interaction.options.getString('reason') || 'No reason provided';
 
         const category = interaction.guild.channels.cache.get(categoryId);
-        if (!category) throw new Error('Ticket category not found. Please run `/ticket setup` again.');
+        if (!category) {
+          throw new Error('Ticket category not found. Please run `/ticket setup` again.');
+        }
 
-        const safeName = user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20);
-        const channelName = `ticket-${safeName}`;
+        // Build channel name
+        const ticketName = user
+          ? `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`
+          : `ticket-${role.name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`;
 
+        // Build permission overwrites
+        const overwrites = [
+          {
+            id: interaction.guild.roles.everyone.id,
+            deny: [PermissionFlagsBits.ViewChannel],
+          },
+          {
+            id: creator.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+          },
+          {
+            id: client.user.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels],
+          },
+        ];
+
+        // If user provided, give them access individually
+        if (user) {
+          overwrites.push({
+            id: user.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+          });
+        }
+
+        // If role provided, give the ROLE access (so all role members can see)
+        if (role) {
+          overwrites.push({
+            id: role.id,
+            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
+          });
+        }
+
+        // Create the channel
         const ticketChannel = await interaction.guild.channels.create({
-          name: channelName,
+          name: ticketName,
           type: ChannelType.GuildText,
           parent: categoryId,
-          permissionOverwrites: [
-            {
-              id: interaction.guild.roles.everyone.id,
-              deny: [PermissionFlagsBits.ViewChannel],
-            },
-            {
-              id: user.id,
-              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-            },
-            {
-              id: creator.id,
-              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-            },
-            {
-              id: client.user.id,
-              allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels],
-            },
-          ],
+          permissionOverwrites: overwrites,
         });
+
+        // Build target mention string
+        const target = user ? `<@${user.id}>` : `<@&${role.id}>`;
+
+        // Build embed description
+        const embedDescription = user
+          ? `This is a personal ticket for <@${user.id}> with <@${creator.id}>`
+          : `This is a role ticket for <@&${role.id}> created by <@${creator.id}>`;
 
         const embed = createEmbed({
           title: '🎫 Personal Ticket',
-          description: `This is a personal ticket for <@${user.id}> with <@${creator.id}>`,
+          description: embedDescription,
           color: 'info',
           fields: [
-            { name: '👤 User', value: `<@${user.id}>`, inline: true },
+            { name: user ? '👤 User' : '🎭 Role', value: target, inline: true },
             { name: '🙋 Created by', value: `<@${creator.id}>`, inline: true },
             { name: '📝 Reason', value: reason, inline: false },
           ],
@@ -220,17 +255,18 @@ export default {
         );
 
         await ticketChannel.send({
-          content: `<@${user.id}> <@${creator.id}>`,
+          content: target,
           embeds: [embed],
           components: [row],
         });
 
+        // Log to log channel
         await logToChannel(interaction.guild, logChannelId, createEmbed({
           title: '🎫 Ticket Created',
           color: 'info',
           fields: [
             { name: '📌 Channel', value: `<#${ticketChannel.id}>`, inline: true },
-            { name: '👤 User', value: `<@${user.id}>`, inline: true },
+            { name: user ? '👤 User' : '🎭 Role', value: target, inline: true },
             { name: '🙋 Creator', value: `<@${creator.id}>`, inline: true },
             { name: '📝 Reason', value: reason, inline: false },
             { name: '🔧 Created by', value: `<@${interaction.user.id}>`, inline: true },
@@ -240,13 +276,15 @@ export default {
 
         await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(
-            `Ticket created for <@${user.id}>: <#${ticketChannel.id}>`,
+            `Ticket created: <#${ticketChannel.id}>`,
             '✅ Ticket Created'
           )],
         });
       }
 
-      // ── BRING ────────────────────────────────────────────────
+      // ═══════════════════════════════════════════════════════════
+      // BRING
+      // ═══════════════════════════════════════════════════════════
       else if (sub === 'bring') {
         if (interaction.channel.parentId !== categoryId) {
           throw new Error('This command can only be used inside a ticket channel.');
@@ -286,7 +324,9 @@ export default {
         });
       }
 
-      // ── REMOVE ───────────────────────────────────────────────
+      // ═══════════════════════════════════════════════════════════
+      // REMOVE
+      // ═══════════════════════════════════════════════════════════
       else if (sub === 'remove') {
         if (interaction.channel.parentId !== categoryId) {
           throw new Error('This command can only be used inside a ticket channel.');
@@ -294,11 +334,22 @@ export default {
 
         const user = interaction.options.getUser('user');
 
+        // Revoke all permissions for this user
         await interaction.channel.permissionOverwrites.create(user.id, {
           ViewChannel: false,
           SendMessages: false,
           ReadMessageHistory: false,
+          AddReactions: false,
+          AttachFiles: false,
+          EmbedLinks: false,
         });
+
+        // Optional: also kick them from the channel's permission list entirely
+        try {
+          await interaction.channel.permissionOverwrites.delete(user.id);
+        } catch {
+          // If permission overwrite doesn't exist, that's fine
+        }
 
         await interaction.channel.send({
           embeds: [createEmbed({
@@ -325,7 +376,9 @@ export default {
         });
       }
 
-      // ── DELETE ───────────────────────────────────────────────
+      // ═══════════════════════════════════════════════════════════
+      // DELETE
+      // ═══════════════════════════════════════════════════════════
       else if (sub === 'delete') {
         if (interaction.channel.parentId !== categoryId) {
           throw new Error('This command can only be used inside a ticket channel.');
