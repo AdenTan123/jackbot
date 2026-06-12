@@ -72,7 +72,7 @@ class TitanBot extends Client {
       await this.login(this.config.bot.token);
       startupLog('Discord login successful');
 
-      this.once('ready', async () => {
+      this.once('clientReady', async () => {
         try {
           if (this.commandsRegistered) return;
           this.commandsRegistered = true;
@@ -114,30 +114,32 @@ class TitanBot extends Client {
 
       const guildId = this.config.bot.guildId;
 
+      // If a guild ID is provided, attempt guild‑scoped registration
       if (guildId) {
-        // ── GUILD REGISTRATION ─────────────────
-        logger.info(`Registering ${commands.length} guild commands to ${guildId}...`);
-        const guild = await this.guilds.fetch(guildId);
-
-        // Replace all commands atomically - Discord.js handles deduplication
-        const registered = await guild.commands.set(commands);
-        logger.info(`✅ Guild commands registered: ${registered.length} commands`);
-
-        // Clear global commands (they take longer to propagate)
-        logger.info('Clearing global commands...');
+        logger.info(`Attempting guild registration for ${guildId}...`);
+        try {
+          const guild = await this.guilds.fetch(guildId);
+          const registered = await guild.commands.set(commands);
+          logger.info(`✅ Guild commands registered: ${registered.length} commands`);
+        } catch (guildErr) {
+          logger.error('Guild command registration failed – falling back to global:', guildErr);
+          // Fall back to global registration if guild registration fails
+          const registered = await this.application.commands.set(commands);
+          logger.info(`✅ Global commands registered as fallback: ${registered.length} commands`);
+        }
+        // Ensure no stale global commands remain
+        logger.info('Clearing any leftover global commands...');
         await this.application.commands.set([]);
         logger.info('✅ Global commands cleared');
-
       } else {
-        // ── GLOBAL REGISTRATION ────────────────
+        // No guild ID – register globally
         logger.info(`Registering ${commands.length} global commands...`);
         const registered = await this.application.commands.set(commands);
         logger.info(`✅ Global commands registered: ${registered.length} commands`);
       }
-
     } catch (error) {
       logger.error('Error registering commands:', error);
-      throw error; // Re-throw so it's not silently swallowed
+      throw error;
     }
   }
 
