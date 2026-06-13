@@ -1,20 +1,11 @@
-
-
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
-
-require('dotenv').config(); // ensures process.env is populated
+require('dotenv').config(); 
 
 module.exports = {
-  // ---------------------------------------------------------------
-  // Command definition – Discord will see the command as /purge
-  // ---------------------------------------------------------------
   data: new SlashCommandBuilder()
     .setName('purgeall')
     .setDescription('Delete all registered slash commands (owner‑only)'),
 
-  // ---------------------------------------------------------------
-  // Run – invoked by the interaction handler in the bot’s entry file
-  // ---------------------------------------------------------------
   /** @param {import('discord.js').ChatInputCommandInteraction} interaction */
   async execute(interaction) {
     // ---- 1️⃣ Guard – only the owner can use it -------------------
@@ -34,51 +25,50 @@ module.exports = {
       });
     }
 
+    // Defer the reply immediately since clearing commands can take a few seconds
+    await interaction.deferReply({ ephemeral: true });
+
+    let globalSuccess = false;
+    let guildErrors = 0;
+
     // ---- 2️⃣ Delete global commands -------------------------------
     try {
-      const client = interaction.client; // the logged‑in Discord client
-      // Clear all global commands
+      const client = interaction.client; 
       await client.application.commands.set([]);
       console.log('✅ Global commands cleared');
+      globalSuccess = true;
     } catch (err) {
       console.error('❌ Failed to clear global commands', err);
-      return interaction.reply({
-        content: '❌ Could not clear global commands – check the logs.',
-        ephemeral: true,
-      });
     }
 
     // ---- 3️⃣ Delete per‑guild commands -----------------------------
-    try {
-      const { guilds } = interaction.client;
-      // Iterate over every guild the bot is currently cached in
-      for (const [, guild] of guilds.cache) {
-        // Overwrite the guild’s command list with an empty array
+    const { guilds } = interaction.client;
+    for (const [, guild] of guilds.cache) {
+      try {
         await guild.commands.set([]);
         console.log(`✅ Cleared commands for guild ${guild.id}`);
+      } catch (err) {
+        console.error(`❌ Failed to clear commands for guild ${guild.id}`, err);
+        guildErrors++;
       }
-    } catch (err) {
-      console.error('❌ Failed to clear guild commands', err);
-      return interaction.reply({
-        content: '❌ Could not clear guild commands – check the logs.',
-        ephemeral: true,
-      });
     }
 
-    // ---- 4️⃣ Send an *ephemeral* confirmation embed ----------------
+    // ---- 4️⃣ Send final status update via editReply ----------------
     const embed = new EmbedBuilder()
       .setTitle('🧹 Purge Completed')
-      .setDescription('All slash commands have been removed. The bot will now restart and re‑register the proper command set.')
-      .setColor(0x00ff00)
+      .setDescription(
+        `• Global Commands: ${globalSuccess ? '✅ Cleared' : '❌ Failed'}\n` +
+        `• Guilds Failed: ${guildErrors}`
+      )
+      .setColor(guildErrors > 0 ? 0xffa500 : 0x00ff00)
       .setTimestamp();
 
-    await interaction.reply({ embeds: [embed], ephemeral: true });
+    await interaction.editReply({ embeds: [embed] });
 
-    // ---- 5️⃣ Graceful shutdown – let the process manager restart ---
-    // Give Discord a moment to deliver the reply before we exit.
+    // ---- 5️⃣ Graceful shutdown ------------------------------------
     setTimeout(() => {
       console.log('🔁 Exiting process – let the supervisor restart the bot.');
       process.exit(0);
-    }, 2000); // 2 s is enough for the reply to be sent
+    }, 2000); 
   },
 };
