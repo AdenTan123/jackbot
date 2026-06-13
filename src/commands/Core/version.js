@@ -3,7 +3,7 @@ import { createEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
 // Define your current bot version here. Update as needed.
-const CURRENT_VERSION = 'v1.4.2';
+const CURRENT_VERSION = 'v1.4.3';
 
 export default {
   data: new SlashCommandBuilder()
@@ -27,7 +27,7 @@ export default {
         title: '🤖 Bot Version',
         description: message,
         color: 'info',
-      }).addFields({ name: 'Latest Version', value: latest_version, inline: true });
+      }).addFields({ name: 'Latest Version', value: latest_version, inline: true }).addFields({ name: 'Current Bot Version', value: CURRENT_VERSION, inline: true });
 
       await InteractionHelper.safeReply(interaction, { embeds: [embed] });
     } catch (err) {

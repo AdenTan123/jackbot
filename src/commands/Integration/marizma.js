@@ -165,7 +165,7 @@ export default {
           // Replace placeholder strings in the server banner
           const bannerText = m.bannerTemplate 
             ? m.bannerTemplate.replace(/{host}/g, hostUser.username) 
-            : `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Session Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
+            : `✙ Welcome to Unknown Hospital! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Session Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
             
           try {
             const bres = await api.setBanner(bannerText, overrides);
