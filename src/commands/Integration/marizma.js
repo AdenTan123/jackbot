@@ -1,4 +1,4 @@
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { createEmbed, errorEmbed, infoEmbed, successEmbed } from '../../utils/embeds.js';
 import * as api from '../../services/marizmaApi.js';
@@ -28,29 +28,27 @@ export default {
     try {
       const sub = interaction.options.getSubcommand();
 
-      // Multi‑guild guard for startup / shutdown – optional, keep if you still need it
-      if (['startup', 'shutdown'].includes(sub)) {
-        const mainGuild = process.env.MAIN_GUILD_ID;
-        if (mainGuild && interaction.guildId !== mainGuild) {
-          const embed = createEmbed({
-            title: '⚠️ Invalid Guild',
-            description: 'The `startup` and `shutdown` sub‑commands are restricted to the main guild.',
-            color: 'error',
+      // Load guild‑specific Marizma configuration
+      const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
+      const m = cfg?.marizma ?? {};
+
+      // ── MULTI-GUILD PERMISSION CHECK ──────────────────────
+      // If allowed roles are set, ensure the user has at least one of them (or has ManageGuild)
+      if (m.allowedRoles && m.allowedRoles.length > 0) {
+        const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageGuild);
+        const hasRole = interaction.member.roles.cache.some(role => m.allowedRoles.includes(role.id));
+        
+        if (!isAdmin && !hasRole) {
+          return await InteractionHelper.safeEditReply(interaction, { 
+            embeds: [errorEmbed('You do not have the required roles to use Marizma commands on this server.')] 
           });
-          return await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
         }
       }
 
-      // Load guild‑specific Marizma configuration (including announceChannelId)
-      const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
-      const m = cfg?.marizma ?? {};
-      const announceChannelId = m?.announceChannelId; // may be undefined – fall back to hard‑coded if you want
-
+      // ── MULTI-GUILD API OVERRIDES ─────────────────────────
       const overrides = {};
-      if (cfg && cfg.marizma) {
-        if (cfg.marizma.apiKey) overrides.apiKey = cfg.marizma.apiKey;
-        if (cfg.marizma.baseUrl) overrides.baseUrl = cfg.marizma.baseUrl;
-      }
+      if (m.apiKey) overrides.apiKey = m.apiKey;
+      if (m.baseUrl) overrides.baseUrl = m.baseUrl;
 
       // Debug logging (mask API key)
       try {
@@ -60,7 +58,7 @@ export default {
 
       // Ensure an API key exists somewhere
       if (!process.env.MARIZMA_API_KEY && !overrides.apiKey) {
-        return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Marizma API key not configured. Set MARIZMA_API_KEY in environment or run /setup to configure for this server.') ] });
+        return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Marizma API key not configured. Set MARIZMA_API_KEY in environment or run `/setup marizma` to configure for this server.') ] });
       }
 
       switch (sub) {
@@ -116,28 +114,36 @@ export default {
             logger.warn('Failed to set HideFromList before shutdown:', e?.message || e);
           }
 
-          // Use guild‑specific announce channel if configured, otherwise fallback to hard‑coded ID.
-          const purgeChannelId = announceChannelId || '1507406822288654467';
-          try {
-            const ch = await interaction.client.channels.fetch(purgeChannelId).catch(() => null);
-            if (ch && ch.isTextBased && ch.messages) {
-              let fetched;
-              do {
-                fetched = await ch.messages.fetch({ limit: 100 }).catch(() => null);
-                if (!fetched || fetched.size === 0) break;
-                const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
-                if (deletable.size > 0) {
-                  await ch.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure:', err?.message || err));
-                } else {
-                  break;
-                }
-              } while (fetched && fetched.size > 0);
+          // Use the guild‑specific announce channel for purging and WBM embeds
+          if (m.announceChannelId) {
+            try {
+              const ch = await interaction.client.channels.fetch(m.announceChannelId).catch(() => null);
+              if (ch && ch.isTextBased && ch.messages) {
+                // Purge old messages (≤14 days) in batches of 100
+                let fetched;
+                do {
+                  fetched = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+                  if (!fetched || fetched.size === 0) break;
+                  const deletable = fetched.filter(msg => (Date.now() - msg.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
+                  if (deletable.size > 0) {
+                    await ch.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure:', err?.message || err));
+                  } else {
+                    break;
+                  }
+                } while (fetched && fetched.size > 0);
 
-              const wbmEmbed = createEmbed({ title: '‧₊˚ ┊WBM SESSIONS┊˚₊‧', description: `⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔\n\nWelcome to Willowbrook Memorial! We are delighted to see you join our immersive roleplay community. Take part in roleplay with us with your favourite role, either be a nurse, paramedic, a doctor, surgeon or even just a patient, you can do it all here in Willowbrook!\n\nPlease note our server is currently closed, if you had our sessions ping, you will get pinged if we have any sessions! Thank you!\n⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔` });
-              await ch.send({ embeds: [wbmEmbed] }).catch(err => logger.warn('Failed to send WBM embed after purge:', err?.message || err));
+                // Build the embed using guild config values (fallback to defaults if missing)
+                const wbmEmbed = createEmbed({
+                  title: m.sessionTitle || '‧₊˚ ┊WBM SESSIONS┊˚₊‧',
+                  description: m.sessionBody || `⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔\n\nWelcome to Willowbrook Memorial! We are delighted to see you join our immersive roleplay community. Take part in roleplay with us with your favourite role, either be a nurse, paramedic, a doctor, surgeon or even just a patient, you can do it all here in Willowbrook!\n\nPlease note our server is currently closed, if you had our sessions ping, you will get pinged if we have any sessions! Thank you!\n⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔`
+                });
+                await ch.send({ embeds: [wbmEmbed] }).catch(err => logger.warn('Failed to send session embed after purge:', err?.message || err));
+              }
+            } catch (e) {
+              logger.warn('Could not purge/send embed in announce channel:', e?.message || e);
             }
-          } catch (e) {
-            logger.warn('Could not purge/send WBM embed in channel:', e?.message || e);
+          } else {
+            logger.warn(`Guild ${interaction.guildId} triggered shutdown, but no announceChannelId is configured.`);
           }
 
           const res = await api.shutdown(overrides);
@@ -156,8 +162,12 @@ export default {
           const cohostUser = interaction.options.getUser('cohost');
           const hostUser = interaction.options.getUser('host') || interaction.user;
 
+          // Replace placeholder strings in the server banner
+          const bannerText = m.bannerTemplate 
+            ? m.bannerTemplate.replace(/{host}/g, hostUser.username) 
+            : `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Session Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
+            
           try {
-            const bannerText = `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Session Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
             const bres = await api.setBanner(bannerText, overrides);
             logger.debug('Marizma.setBanner response (startup)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
           } catch (e) {
@@ -168,34 +178,41 @@ export default {
           const embed = createEmbed({ title: 'Successfully Started Up Server', description: `Join Server with this link: ${joinLink}` });
           await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
 
-          // Use guild‑specific announce channel if configured.
-          const channelId = announceChannelId || '1507406822288654467';
-          try {
-            const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
-            if (channel && channel.isTextBased && channel.messages) {
-              // purge previous messages
-              try {
-                let fetched;
-                do {
-                  fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-                  if (!fetched || fetched.size === 0) break;
-                  const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
-                  if (deletable.size > 0) {
-                    await channel.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure (startup):', err?.message || err));
-                  } else {
-                    break;
-                  }
-                } while (fetched && fetched.size > 0);
-              } catch (purgeErr) {
-                logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
-              }
+          if (m.announceChannelId) {
+            try {
+              const channel = await interaction.client.channels.fetch(m.announceChannelId).catch(() => null);
+              if (channel && channel.isTextBased && channel.messages) {
+                // Purge old messages before posting the new announcement
+                try {
+                  let fetched;
+                  do {
+                    fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
+                    if (!fetched || fetched.size === 0) break;
+                    const deletable = fetched.filter(msg => (Date.now() - msg.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
+                    if (deletable.size > 0) {
+                      await channel.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure (startup):', err?.message || err));
+                    } else {
+                      break;
+                    }
+                  } while (fetched && fetched.size > 0);
+                } catch (purgeErr) {
+                  logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
+                }
 
-              const cohostMention = cohostUser ? `<@${cohostUser.id}>` : 'None';
-              const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${hostUser.id}>\n\nCohost: ${cohostMention}\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
-              await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
+                const cohostMention = cohostUser ? `<@${cohostUser.id}>` : 'None';
+                // Replace all placeholders as defined in setup.js options
+                const announcement = m.ssuMessage
+                  ? m.ssuMessage
+                      .replace(/{host}/g, `<@${hostUser.id}>`)
+                      .replace(/{cohost}/g, cohostMention)
+                      .replace(/{link}/g, joinLink)
+                  : `🚀 Server has started! Hosted by <@${hostUser.id}>. ${cohostUser ? `Co-hosted by ${cohostMention}.` : ''} Join with this link: ${joinLink}`;
+                
+                await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
+              }
+            } catch (e) {
+              logger.warn('Could not post startup announcement:', e?.message || e);
             }
-          } catch (e) {
-            logger.warn('Could not post startup announcement:', e?.message || e);
           }
           return;
         }
