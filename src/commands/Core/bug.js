@@ -1,40 +1,51 @@
-import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags } from 'discord.js';
+import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
 import { createEmbed } from '../../utils/embeds.js';
-
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { createBugReportModal } from '../../interactions/modals/bugReportModal.js';
+
 export default {
-    data: new SlashCommandBuilder()
-        .setName("bug")
-        .setDescription("Report a bug or issue with the bot"),
+  data: new SlashCommandBuilder()
+    .setName('bug')
+    .setDescription('Bug reporting utilities')
+    .addSubcommand(sub =>
+      sub.setName('report').setDescription('Open a bug report modal'))
+    .addSubcommand(sub =>
+      sub.setName('view').setDescription('View bug reports (owner only)')),
 
-    async execute(interaction) {
-        const githubButton = new ButtonBuilder()
-            .setLabel('Report Bug on GitHub')
-            .setStyle(ButtonStyle.Link)
-            .setURL('');
+  async execute(interaction) {
+    const sub = interaction.options.getSubcommand();
 
-        const row = new ActionRowBuilder().addComponents(githubButton);
+    if (sub === 'report') {
+      const modal = createBugReportModal();
+      await interaction.showModal(modal);
+      return;
+    }
 
-        const bugReportEmbed = createEmbed({
-            title: '?? Bug Report',
-            description: 'Found a bug? Please report it on our GitHub Issues page!\n\n' +
-            '**When reporting a bug, please include:**\n' +
-            'Detailed description of the issue\n' +
-            '� ?? Steps to reproduce the problem\n' +
-            '� ?? Screenshots if applicable\n' +
-            '� ?? Your bot version and environment\n\n' +
-            'This helps us fix issues faster and more effectively!',
-            color: 'error'
-        })
-            .setTimestamp();
-
-        await InteractionHelper.safeReply(interaction, {
-            embeds: [bugReportEmbed],
-            components: [row],
+    if (sub === 'view') {
+      const ownerIds = (process.env.OWNER_IDS || '').split(',').map(id => id.trim());
+      if (!ownerIds.includes(interaction.user.id)) {
+        const denyEmbed = createEmbed({
+          title: '❌ Access Denied',
+          description: 'Only the bot owner can view bug reports.',
+          color: 'error',
         });
-    },
+        await InteractionHelper.safeReply(interaction, { embeds: [denyEmbed] });
+        return;
+      }
+      const viewEmbed = createEmbed({
+        title: '🛠️ Bug Reports',
+        description: 'Bug report viewing is not yet implemented.',
+        color: 'info',
+      });
+      await InteractionHelper.safeReply(interaction, { embeds: [viewEmbed] });
+    }
+  },
+
+  // Forward modal submissions to the handler defined in the modal file
+  async modalSubmit(interaction) {
+    const { bugReportModal } = await import('../../interactions/modals/bugReportModal.js');
+    if (bugReportModal && typeof bugReportModal.execute === 'function') {
+      await bugReportModal.execute(interaction);
+    }
+  },
 };
-
-
-
-
