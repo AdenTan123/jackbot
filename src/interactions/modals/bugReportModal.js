@@ -1,10 +1,7 @@
-import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
+import { createEmbed } from '../../utils/embeds.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
 
-/**
- * Constructs the bug report modal used by the /bug report command.
- *
- * @returns {ModalBuilder} The configured modal instance.
- */
 export function createBugReportModal() {
   const modal = new ModalBuilder()
     .setCustomId('bugReportModal')
@@ -48,35 +45,50 @@ export function createBugReportModal() {
   return modal;
 }
 
-/**
- * Interaction handler for the bug report modal submission.
- * The framework expects an exported object with `customId` and `execute`.
- */
 export const bugReportModal = {
   customId: 'bugReportModal',
   async execute(interaction) {
-    const description = interaction.fields.getTextInputValue('description');
-    const reproduce = interaction.fields.getTextInputValue('reproduce');
-    const device = interaction.fields.getTextInputValue('device');
-    const extra = interaction.fields.getTextInputValue('extra');
+    try {
+      const description = interaction.fields.getTextInputValue('description');
+      const reproduce = interaction.fields.getTextInputValue('reproduce');
+      const device = interaction.fields.getTextInputValue('device');
+      const extra = interaction.fields.getTextInputValue('extra');
 
-    const { createEmbed } = await import('../../utils/embeds.js');
-    const { InteractionHelper } = await import('../../utils/interactionHelper.js');
-    const { MessageFlags } = await import('discord.js');
+      const reportEmbed = createEmbed({
+        title: '🐞 New Bug Report',
+        description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra || 'None'}`,
+        color: 'warning',
+      });
 
-    const reportEmbed = createEmbed({
-      title: '🐞 New Bug Report',
-      description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra || 'None'}`,
-      color: 'warning',
-    });
+      const channelId = process.env.BUG_REPORT_CHANNEL_ID;
+      
+      // Fallback to fetch if the channel isn't cached yet
+      const channel = interaction.client.channels.cache.get(channelId) 
+        || await interaction.client.channels.fetch(channelId).catch(() => null);
 
-    const channelId = process.env.BUG_REPORT_CHANNEL_ID;
-    const channel = interaction.client.channels.cache.get(channelId);
-    if (channel) await channel.send({ embeds: [reportEmbed] });
+      if (channel) {
+        await channel.send({ embeds: [reportEmbed] }).catch(err => {
+          console.error("❌ Failed to send embed to bug channel:", err);
+        });
+      } else {
+        console.warn(`⚠️ Bug report channel with ID ${channelId} could not be found.`);
+      }
 
-    await InteractionHelper.safeReply(interaction, {
-      content: 'Thank you! Your bug report has been submitted.',
-      flags: MessageFlags.Ephemeral,
-    });
+      await InteractionHelper.safeReply(interaction, {
+        content: 'Thank you! Your bug report has been submitted for review.',
+        flags: [MessageFlags.Ephemeral], // Wrapped in an array for standard compliance
+      });
+
+    } catch (error) {
+      console.error("❌ Error handling bugReportModal submission:", error);
+      
+      // Attempt a safe emergency reply if everything else errors out
+      if (!interaction.replied && !interaction.deferred) {
+        await interaction.reply({
+          content: 'An internal error occurred while processing your report.',
+          ephemeral: true
+        }).catch(() => null);
+      }
+    }
   },
 };
