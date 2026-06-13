@@ -47,3 +47,36 @@ export function createBugReportModal() {
 
   return modal;
 }
+
+/**
+ * Interaction handler for the bug report modal submission.
+ * The framework expects an exported object with `customId` and `execute`.
+ */
+export const bugReportModal = {
+  customId: 'bugReportModal',
+  async execute(interaction) {
+    const description = interaction.fields.getTextInputValue('description');
+    const reproduce = interaction.fields.getTextInputValue('reproduce');
+    const device = interaction.fields.getTextInputValue('device');
+    const extra = interaction.fields.getTextInputValue('extra');
+
+    const { createEmbed } = await import('../../utils/embeds.js');
+    const { InteractionHelper } = await import('../../utils/interactionHelper.js');
+    const { MessageFlags } = await import('discord.js');
+
+    const reportEmbed = createEmbed({
+      title: '🐞 New Bug Report',
+      description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra || 'None'}`,
+      color: 'warning',
+    });
+
+    const channelId = process.env.BUG_REPORT_CHANNEL_ID;
+    const channel = interaction.client.channels.cache.get(channelId);
+    if (channel) await channel.send({ embeds: [reportEmbed] });
+
+    await InteractionHelper.safeReply(interaction, {
+      content: 'Thank you! Your bug report has been submitted.',
+      flags: MessageFlags.Ephemeral,
+    });
+  },
+};
