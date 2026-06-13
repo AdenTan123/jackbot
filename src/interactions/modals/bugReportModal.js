@@ -1,8 +1,13 @@
-import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
-import { createEmbed } from '../../utils/embeds.js';
-import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { Logger } from '../../utils/logger.js'; // <-- added logger import
 
+/**
+ * Constructs the bug report modal used by the /bug report command.
+ *
+ * @returns {ModalBuilder} The configured modal instance.
+ */
 export function createBugReportModal() {
+  Logger.info('createBugReportModal – building modal');
   const modal = new ModalBuilder()
     .setCustomId('bugReportModal')
     .setTitle('Bug Report');
@@ -42,51 +47,60 @@ export function createBugReportModal() {
     new ActionRowBuilder().addComponents(extra)
   );
 
+  Logger.info('createBugReportModal – modal built');
   return modal;
 }
 
+/**
+ * Interaction handler for the bug report modal submission.
+ * The framework expects an exported object with `customId` and `execute`.
+ */
 export const bugReportModal = {
   customId: 'bugReportModal',
   async execute(interaction) {
+    Logger.info('bugReportModal.execute – received submission');
     try {
       const description = interaction.fields.getTextInputValue('description');
       const reproduce = interaction.fields.getTextInputValue('reproduce');
       const device = interaction.fields.getTextInputValue('device');
       const extra = interaction.fields.getTextInputValue('extra');
 
+      Logger.debug('Collected fields', { description, reproduce, device, extra });
+
+      const { createEmbed } = await import('../../utils/embeds.js');
+      const { InteractionHelper } = await import('../../utils/interactionHelper.js');
+      const { MessageFlags } = await import('discord.js');
+      Logger.info('Dynamic imports finished');
+
       const reportEmbed = createEmbed({
         title: '🐞 New Bug Report',
         description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra || 'None'}`,
         color: 'warning',
       });
+      Logger.info('Report embed created');
 
       const channelId = process.env.BUG_REPORT_CHANNEL_ID;
-      
-      // Fallback to fetch if the channel isn't cached yet
-      const channel = interaction.client.channels.cache.get(channelId) 
-        || await interaction.client.channels.fetch(channelId).catch(() => null);
-
+      Logger.debug('Bug report channel ID from env', { channelId });
+      const channel = interaction.client.channels.cache.get(channelId);
       if (channel) {
-        await channel.send({ embeds: [reportEmbed] }).catch(err => {
-          console.error("❌ Failed to send embed to bug channel:", err);
-        });
+        await channel.send({ embeds: [reportEmbed] });
+        Logger.info('Report embed sent to channel');
       } else {
-        console.warn(`⚠️ Bug report channel with ID ${channelId} could not be found.`);
+        Logger.warn('Bug report channel not found or not cached', { channelId });
       }
 
       await InteractionHelper.safeReply(interaction, {
-        content: 'Thank you! Your bug report has been submitted for review.',
-        flags: [MessageFlags.Ephemeral], // Wrapped in an array for standard compliance
+        content: 'Thank you! Your bug report has been submitted.',
+        flags: MessageFlags.Ephemeral,
       });
-
+      Logger.info('User acknowledged with ephemeral reply');
     } catch (error) {
-      console.error("❌ Error handling bugReportModal submission:", error);
-      
-      // Attempt a safe emergency reply if everything else errors out
+      Logger.error('bugReportModal.execute – error processing submission', { error });
+      // If we haven't already replied, send an error message
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
-          content: 'An internal error occurred while processing your report.',
-          ephemeral: true
+          content: '❌ An internal error occurred while processing your report. Please try again later.',
+          ephemeral: true,
         }).catch(() => null);
       }
     }
