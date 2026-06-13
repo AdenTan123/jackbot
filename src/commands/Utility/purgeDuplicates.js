@@ -1,15 +1,7 @@
-// src/commands/Utility/purgeDuplicates.js
-// -------------------------------------------------------------------
-// /purge – delete *all* slash‑command registrations (global + per‑guild)
-// -------------------------------------------------------------------
-// Usage: only the owner (process.env.OWNER_ID) may run this.
-// After the purge the bot exits so the process manager restarts it.
-//
-// This command follows the same shape as the other command modules in
-// the project (see other files in src/commands/Utility for reference).
-// -------------------------------------------------------------------
+
 
 const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
+
 require('dotenv').config(); // ensures process.env is populated
 
 module.exports = {
