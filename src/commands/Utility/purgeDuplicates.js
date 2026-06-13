@@ -17,7 +17,7 @@ module.exports = {
   // Command definition – Discord will see the command as /purge
   // ---------------------------------------------------------------
   data: new SlashCommandBuilder()
-    .setName('purgecommands')
+    .setName('purgeall')
     .setDescription('Delete all registered slash commands (owner‑only)'),
 
   // ---------------------------------------------------------------
