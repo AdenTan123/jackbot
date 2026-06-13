@@ -9,12 +9,12 @@
 //      command list becomes active.
 // ---------------------------------------------------------------
 
-const {
+import {
   REST,
   Routes,
   SlashCommandBuilder,
   EmbedBuilder,
-} = require('discord.js');
+} from 'discord.js';
 require('dotenv').config(); // loads .env → process.env
 
 // -----------------------------------------------------------------
@@ -67,6 +67,8 @@ module.exports = {
   data: new SlashCommandBuilder()
     .setName('refreshcommands')
     .setDescription('Delete all commands (global & guild) and re‑register the current set (owner‑only)'),
+
+
 
   /**
    * @param {import('discord.js').ChatInputCommandInteraction} interaction
