@@ -115,7 +115,7 @@ const logger = createLogger({
     enforceLogSchema(),
     timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
     errors({ stack: true }),
-    format.json()
+    format.printf(info => JSON.stringify(info))
   ),
   defaultMeta: { service: 'titan-bot' },
   transports: [
