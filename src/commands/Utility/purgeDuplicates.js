@@ -2,18 +2,19 @@ const { SlashCommandBuilder, EmbedBuilder } = require('discord.js');
 require('dotenv').config(); 
 
 module.exports = {
+  // Changing this to 'purge' so it displays correctly in Discord
   data: new SlashCommandBuilder()
-    .setName('purgeall')
+    .setName('purgecommands')
     .setDescription('Delete all registered slash commands (owner‑only)'),
 
   /** @param {import('discord.js').ChatInputCommandInteraction} interaction */
   async execute(interaction) {
-    // ---- 1️⃣ Guard – only the owner can use it -------------------
-    const ownerId = process.env.OWNER_ID?.trim();
+    // ---- 1️⃣ Guard – Fixed to look for OWNER_IDS to match your environment ----
+    const ownerId = process.env.OWNER_IDS?.trim();
     if (!ownerId) {
-      console.error('❌ OWNER_ID not set in .env');
+      console.error('❌ OWNER_IDS not set in environment variables');
       return interaction.reply({
-        content: '❌ Bot mis‑configuration – OWNER_ID is missing.',
+        content: '❌ Bot mis‑configuration – OWNER_IDS is missing.',
         ephemeral: true,
       });
     }
@@ -25,7 +26,7 @@ module.exports = {
       });
     }
 
-    // Defer the reply immediately since clearing commands can take a few seconds
+    // Defer the reply immediately to prevent interaction timeout tokens from expiring
     await interaction.deferReply({ ephemeral: true });
 
     let globalSuccess = false;
@@ -53,7 +54,7 @@ module.exports = {
       }
     }
 
-    // ---- 4️⃣ Send final status update via editReply ----------------
+    // ---- 4️⃣ Final status update via editReply --------------------
     const embed = new EmbedBuilder()
       .setTitle('🧹 Purge Completed')
       .setDescription(
@@ -67,7 +68,7 @@ module.exports = {
 
     // ---- 5️⃣ Graceful shutdown ------------------------------------
     setTimeout(() => {
-      console.log('🔁 Exiting process – let the supervisor restart the bot.');
+      console.log('🔁 Exiting process – letting the supervisor restart the bot.');
       process.exit(0);
     }, 2000); 
   },
