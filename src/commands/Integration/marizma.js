@@ -28,22 +28,37 @@ export default {
     try {
       const sub = interaction.options.getSubcommand();
 
-      const guildCfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
-      const overrides = {};
-      if (guildCfg && guildCfg.marizma) {
-        if (guildCfg.marizma.apiKey) overrides.apiKey = guildCfg.marizma.apiKey;
-        if (guildCfg.marizma.baseUrl) overrides.baseUrl = guildCfg.marizma.baseUrl;
+      // Multi‑guild guard for startup / shutdown – optional, keep if you still need it
+      if (['startup', 'shutdown'].includes(sub)) {
+        const mainGuild = process.env.MAIN_GUILD_ID;
+        if (mainGuild && interaction.guildId !== mainGuild) {
+          const embed = createEmbed({
+            title: '⚠️ Invalid Guild',
+            description: 'The `startup` and `shutdown` sub‑commands are restricted to the main guild.',
+            color: 'error',
+          });
+          return await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+        }
       }
 
-      // Temporary debug logging: record invocation context but never log full API keys
+      // Load guild‑specific Marizma configuration (including announceChannelId)
+      const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
+      const m = cfg?.marizma ?? {};
+      const announceChannelId = m?.announceChannelId; // may be undefined – fall back to hard‑coded if you want
+
+      const overrides = {};
+      if (cfg && cfg.marizma) {
+        if (cfg.marizma.apiKey) overrides.apiKey = cfg.marizma.apiKey;
+        if (cfg.marizma.baseUrl) overrides.baseUrl = cfg.marizma.baseUrl;
+      }
+
+      // Debug logging (mask API key)
       try {
         const masked = overrides.apiKey ? (String(overrides.apiKey).length > 6 ? `${String(overrides.apiKey).slice(0,3)}...${String(overrides.apiKey).slice(-3)}` : '***') : null;
         logger.debug('Marizma command invoked', { sub, guildId: interaction.guildId, userId: interaction.user.id, overrides: { apiKey: masked, baseUrl: overrides.baseUrl } });
-      } catch (logErr) {
-        // swallow logging errors
-      }
+      } catch (logErr) {}
 
-      // require either environment key or guild-specific key
+      // Ensure an API key exists somewhere
       if (!process.env.MARIZMA_API_KEY && !overrides.apiKey) {
         return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Marizma API key not configured. Set MARIZMA_API_KEY in environment or run /setup to configure for this server.') ] });
       }
@@ -86,117 +101,104 @@ export default {
           if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Announce failed', res?.error || null)] });
           return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Announcement sent')] });
         }
-          case 'shutdown': {
-            const bannerText = `⚠️ SSD || The server is now shutting down. Thank you for playing.`;
+        case 'shutdown': {
+          const bannerText = `⚠️ SSD || The server is now shutting down. Thank you for playing.`;
+          try {
+            const bres = await api.setBanner(bannerText, overrides);
+            logger.debug('Marizma.setBanner response (shutdown)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
+          } catch (e) {
+            logger.warn('Failed to set banner before shutdown:', e?.message || e);
+          }
+          try {
+            const sres = await api.setSetting({ HideFromList: true }, overrides);
+            logger.debug('Marizma.setSetting response (shutdown)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
+          } catch (e) {
+            logger.warn('Failed to set HideFromList before shutdown:', e?.message || e);
+          }
 
-            // attempt to set banner and hide from list before shutdown
-            try {
-              const bres = await api.setBanner(bannerText, overrides);
-              logger.debug('Marizma.setBanner response (shutdown)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
-              // ignore bres success check - best effort
-            } catch (e) {
-              logger.warn('Failed to set banner before shutdown:', e?.message || e);
+          // Use guild‑specific announce channel if configured, otherwise fallback to hard‑coded ID.
+          const purgeChannelId = announceChannelId || '1507406822288654467';
+          try {
+            const ch = await interaction.client.channels.fetch(purgeChannelId).catch(() => null);
+            if (ch && ch.isTextBased && ch.messages) {
+              let fetched;
+              do {
+                fetched = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+                if (!fetched || fetched.size === 0) break;
+                const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
+                if (deletable.size > 0) {
+                  await ch.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure:', err?.message || err));
+                } else {
+                  break;
+                }
+              } while (fetched && fetched.size > 0);
+
+              const wbmEmbed = createEmbed({ title: '‧₊˚ ┊WBM SESSIONS┊˚₊‧', description: `⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔\n\nWelcome to Willowbrook Memorial! We are delighted to see you join our immersive roleplay community. Take part in roleplay with us with your favourite role, either be a nurse, paramedic, a doctor, surgeon or even just a patient, you can do it all here in Willowbrook!\n\nPlease note our server is currently closed, if you had our sessions ping, you will get pinged if we have any sessions! Thank you!\n⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔` });
+              await ch.send({ embeds: [wbmEmbed] }).catch(err => logger.warn('Failed to send WBM embed after purge:', err?.message || err));
             }
+          } catch (e) {
+            logger.warn('Could not purge/send WBM embed in channel:', e?.message || e);
+          }
 
-            try {
-              const sres = await api.setSetting({ HideFromList: true }, overrides);
-              logger.debug('Marizma.setSetting response (shutdown)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
-            } catch (e) {
-              logger.warn('Failed to set HideFromList before shutdown:', e?.message || e);
-            }
+          const res = await api.shutdown(overrides);
+          logger.debug('Marizma.shutdown response', { guildId: interaction.guildId, success: Boolean(res && res.success), error: res?.error });
+          if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Shutdown failed', res?.error || null)] });
+          return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Server shutdown initiated (30s)')] });
+        }
+        case 'startup': {
+          try {
+            const sres = await api.setSetting({ HideFromList: false }, overrides);
+            logger.debug('Marizma.setSetting response (startup)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
+          } catch (e) {
+            logger.warn('Failed to set HideFromList on startup:', e?.message || e);
+          }
 
-            // purge messages in the startup announcement channel and post WBM info embed
-            const purgeChannelId = '1507406822288654467';
-            try {
-              const ch = await interaction.client.channels.fetch(purgeChannelId).catch(() => null);
-              if (ch && ch.isTextBased && ch.messages) {
-                // bulk delete in batches (Discord API prevents removing messages older than 14 days)
+          const cohostUser = interaction.options.getUser('cohost');
+          const hostUser = interaction.options.getUser('host') || interaction.user;
+
+          try {
+            const bannerText = `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Session Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
+            const bres = await api.setBanner(bannerText, overrides);
+            logger.debug('Marizma.setBanner response (startup)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
+          } catch (e) {
+            logger.warn('Failed to set banner on startup:', e?.message || e);
+          }
+
+          const joinLink = 'https://www.roblox.com/games/start?placeId=8704997000&launchData=%7B%22serverCode%22%3A%22f99%2D57a%22%7D';
+          const embed = createEmbed({ title: 'Successfully Started Up Server', description: `Join Server with this link: ${joinLink}` });
+          await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
+
+          // Use guild‑specific announce channel if configured.
+          const channelId = announceChannelId || '1507406822288654467';
+          try {
+            const channel = await interaction.client.channels.fetch(channelId).catch(() => null);
+            if (channel && channel.isTextBased && channel.messages) {
+              // purge previous messages
+              try {
                 let fetched;
                 do {
-                  fetched = await ch.messages.fetch({ limit: 100 }).catch(() => null);
+                  fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
                   if (!fetched || fetched.size === 0) break;
                   const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
                   if (deletable.size > 0) {
-                    await ch.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure:', err?.message || err));
+                    await channel.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure (startup):', err?.message || err));
                   } else {
                     break;
                   }
                 } while (fetched && fetched.size > 0);
-
-                const wbmEmbed = createEmbed({ title: '‧₊˚ ┊WBM SESSIONS┊˚₊‧', description: `⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔\n\nWelcome to Willowbrook Memorial! We are delighted to see you join our immersive roleplay community. Take part in roleplay with us with your favourite role, either be a nurse, paramedic, a doctor, surgeon or even just a patient, you can do it all here in Willowbrook!\n\nPlease note our server is currently closed, if you had our sessions ping, you will get pinged if we have any sessions! Thank you!\n⏔⏔⏔⏔⏔⏔ ꒰ ﹕ ꒱ ⏔⏔⏔⏔⏔⏔⏔⏔` });
-                await ch.send({ embeds: [wbmEmbed] }).catch(err => logger.warn('Failed to send WBM embed after purge:', err?.message || err));
+              } catch (purgeErr) {
+                logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
               }
-            } catch (e) {
-              logger.warn('Could not purge/send WBM embed in channel:', e?.message || e);
+
+              const cohostMention = cohostUser ? `<@${cohostUser.id}>` : 'None';
+              const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${hostUser.id}>\n\nCohost: ${cohostMention}\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
+              await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
             }
-
-            const res = await api.shutdown(overrides);
-            logger.debug('Marizma.shutdown response', { guildId: interaction.guildId, success: Boolean(res && res.success), error: res?.error });
-            if (!res || !res.success) return await InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed('Shutdown failed', res?.error || null)] });
-            return await InteractionHelper.safeEditReply(interaction, { embeds: [successEmbed('Server shutdown initiated (30s)')] });
+          } catch (e) {
+            logger.warn('Could not post startup announcement:', e?.message || e);
           }
-        case 'startup': {
-  // perform setsetting hidefromlist:False
-  try {
-    const sres = await api.setSetting({ HideFromList: false }, overrides);
-    logger.debug('Marizma.setSetting response (startup)', { guildId: interaction.guildId, success: Boolean(sres && sres.success), error: sres?.error });
-  } catch (e) {
-    logger.warn('Failed to set HideFromList on startup:', e?.message || e);
-  }
-
-  // get optional cohost and host
-  const cohostUser = interaction.options.getUser('cohost'); // may be null
-  const hostUser = interaction.options.getUser('host') || interaction.user;
-
-  // attempt to set a welcoming banner
-  try {
-    const bannerText = `✙ Welcome to WBM! Rp Will Start At 15 players, Do !mod, Or !help, For Assistance, This Session Is Being Hosted By ${hostUser.username}, Thank You Lovely Rp!  ✙`;
-    const bres = await api.setBanner(bannerText, overrides);
-    logger.debug('Marizma.setBanner response (startup)', { guildId: interaction.guildId, success: Boolean(bres && bres.success), error: bres?.error });
-  } catch (e) {
-    logger.warn('Failed to set banner on startup:', e?.message || e);
-  }
-
-  // reply to the command with embed + link
-  const joinLink = 'https://www.roblox.com/games/start?placeId=8704997000&launchData=%7B%22serverCode%22%3A%22f99%2D57a%22%7D';
-  const embed = createEmbed({ title: 'Successfully Started Up Server', description: `Join Server with this link: ${joinLink}` });
-  await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
-
-  // post announcement in target channel
-  const announceChannelId = '1507406822288654467';
-  try {
-    const channel = await interaction.client.channels.fetch(announceChannelId).catch(() => null);
-    if (channel && channel.isTextBased && channel.messages) {
-      // purge previous session messages
-      try {
-        let fetched;
-        do {
-          fetched = await channel.messages.fetch({ limit: 100 }).catch(() => null);
-          if (!fetched || fetched.size === 0) break;
-          const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
-          if (deletable.size > 0) {
-            await channel.bulkDelete(deletable, true).catch(err => logger.warn('bulkDelete partial failure (startup):', err?.message || err));
-          } else {
-            break;
-          }
-        } while (fetched && fetched.size > 0);
-      } catch (purgeErr) {
-        logger.warn('Failed purging announce channel on startup:', purgeErr?.message || purgeErr);
-      }
-
-      // Build co-host mention safely
-      const cohostMention = cohostUser ? `<@${cohostUser.id}>` : 'None';
-
-      const announcement = `# Server Start Up !\n\n-# || <@&1508375495732101250> ||\n\nGreetings, Willowbrook Memorial Is Hosting An SSU !\n\nOur Host: <@${hostUser.id}>\n\nCohost: ${cohostMention}\n\nIf you have seen this, dont forget to react with the following:\n\n<:GreenYellowNeonHeart:1511630059113549974> - Available, Coming in 5-10 minutes\n\n<:YellowNeonHeart:1511630192257536181> - Currently Unavailable, Might join in 15-30 minutes\n\n<:OrangeNeonHeart:1511629580841259088> - Unavailable, Cannot join\n\nMake sure to join us! \nCode: f99-57a \nOr click this link: ${joinLink}\n\nthank you.`;
-      await channel.send({ content: announcement }).catch(err => logger.warn('Failed to send startup announcement:', err?.message || err));
-    }
-  } catch (e) {
-    logger.warn('Could not post startup announcement:', e?.message || e);
-  }
-
-  return;
-}
-
+          return;
+        }
         case 'setsetting': {
           const HideFromList = interaction.options.getBoolean('hidefromlist');
           const Private = interaction.options.getBoolean('private');
