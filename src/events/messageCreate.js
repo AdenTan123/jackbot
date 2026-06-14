@@ -26,6 +26,9 @@ export default {
         return;
       }
 
+      // Handle counting game before leveling to possibly delete message
+      await handleCounting(message, client);
+
       await handleLeveling(message, client);
     } catch (error) {
       logger.error('Error in messageCreate event:', error);

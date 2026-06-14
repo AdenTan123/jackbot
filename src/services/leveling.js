@@ -1,7 +1,7 @@
 
 
 
-
+/**
 
 import { EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
@@ -75,6 +75,8 @@ export function getLevelFromXp(xp) {
  * @param {number} currentXp - Current XP progress towards next level
  * @returns {number} Total accumulated XP
  */
+
+/**
 export function calculateTotalXp(level, currentXp = 0) {
   let total = currentXp;
   for (let i = 0; i < level; i++) {
@@ -554,4 +556,4 @@ export async function deleteUserLevelData(client, guildId, userId) {
 }
 
 
-
+*/
