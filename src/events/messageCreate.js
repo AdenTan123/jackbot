@@ -1,8 +1,3 @@
-
-
-
-
-
 import { Events, ChannelType, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { getLevelingConfig, getUserLevelData } from '../services/leveling.js';
@@ -27,7 +22,10 @@ export default {
       }
 
       // Handle counting game before leveling to possibly delete message
-      await handleCounting(message, client);
+      const messageDeleted = await handleCounting(message, client);
+      
+      // If the counting game deleted a non-number message, stop right here
+      if (messageDeleted) return;
 
       await handleLeveling(message, client);
     } catch (error) {
@@ -37,12 +35,76 @@ export default {
 };
 
 
+// ==========================================
+// 🔢 COUNTING GAME LOGIC
+// ==========================================
+async function handleCounting(message, client) {
+  try {
+    const config = await getGuildConfig(client, message.guild.id).catch(() => null);
+    const countingConfig = config?.counting;
+
+    // Check if counting is configured and if we are in the correct channel
+    if (!countingConfig || message.channel.id !== countingConfig.channelId) {
+      return false; // Not a counting message, proceed normally
+    }
+
+    const content = message.content.trim();
+    let parsedNumber = null;
+
+    // Parse the message (handle normal numbers or math)
+    if (countingConfig.allowMath) {
+      const sanitized = content.replace(/[^-()\d/*+.]/g, '');
+      if (sanitized === content.replace(/\s+/g, '')) {
+        try { parsedNumber = Function(`'use strict'; return (${sanitized})`)(); } 
+        catch (e) { parsedNumber = null; }
+      }
+    } else {
+      if (/^-?\d+$/.test(content)) parsedNumber = parseInt(content, 10);
+    }
+
+    // Handle invalid/non-number messages
+    if (parsedNumber === null || isNaN(parsedNumber)) {
+      if (countingConfig.deleteNonWords) {
+        await message.delete().catch(() => {});
+        return true; // Return true to tell execute() the message was deleted
+      }
+      return false; 
+    }
+
+    const currentCount = countingConfig.lastNumber || 0;
+    const expectedNumber = currentCount + 1;
+
+    // Check for failure conditions (wrong number OR counting twice in a row)
+    if (parsedNumber !== expectedNumber || message.author.id === countingConfig.lastUserId) {
+      await message.react('❌').catch(() => {});
+      await message.channel.send(`<@${message.author.id}> RUINED IT AT **${currentCount}**!!! Game has been restarted to 0.`);
+
+      // Reset the config
+      countingConfig.lastNumber = 0;
+      countingConfig.lastUserId = null;
+      await updateGuildConfig(client, message.guild.id, { counting: countingConfig });
+      return false;
+    }
+
+    // Success! User counted correctly
+    await message.react('✅').catch(() => {});
+    
+    // Update and save the new count state
+    countingConfig.lastNumber = expectedNumber;
+    countingConfig.lastUserId = message.author.id;
+    await updateGuildConfig(client, message.guild.id, { counting: countingConfig });
+    return false;
+
+  } catch (err) {
+    logger.error('Counting system error:', err);
+    return false;
+  }
+}
 
 
-
-
-
-
+// ==========================================
+// ⬆️ LEVELING LOGIC
+// ==========================================
 async function handleLeveling(message, client) {
   try {
     const rateLimitKey = `xp-event:${message.guild.id}:${message.author.id}`;
@@ -57,12 +119,10 @@ async function handleLeveling(message, client) {
       return;
     }
 
-    
     if (levelingConfig.ignoredChannels?.includes(message.channel.id)) {
       return;
     }
 
-    
     if (levelingConfig.ignoredRoles?.length > 0) {
       const member = await message.guild.members.fetch(message.author.id).catch(() => {
         return null;
@@ -72,46 +132,37 @@ async function handleLeveling(message, client) {
       }
     }
 
-    
     if (levelingConfig.blacklistedUsers?.includes(message.author.id)) {
       return;
     }
 
-    
     if (!message.content || message.content.trim().length === 0) {
       return;
     }
 
     const userData = await getUserLevelData(client, message.guild.id, message.author.id);
     
-    
     const cooldownTime = levelingConfig.xpCooldown || 60;
     const now = Date.now();
     const timeSinceLastMessage = now - (userData.lastMessage || 0);
-    
     
     if (timeSinceLastMessage < cooldownTime * 1000) {
       return;
     }
 
-    
     const minXP = levelingConfig.xpRange?.min || levelingConfig.xpPerMessage?.min || 15;
     const maxXP = levelingConfig.xpRange?.max || levelingConfig.xpPerMessage?.max || 25;
 
-    
     const safeMinXP = Math.max(1, minXP);
     const safeMaxXP = Math.max(safeMinXP, maxXP);
 
-    
     const xpToGive = Math.floor(Math.random() * (safeMaxXP - safeMinXP + 1)) + safeMinXP;
 
-    
     let finalXP = xpToGive;
     if (levelingConfig.xpMultiplier && levelingConfig.xpMultiplier > 1) {
       finalXP = Math.floor(finalXP * levelingConfig.xpMultiplier);
     }
 
-    
     const result = await addXp(client, message.guild, message.member, finalXP);
     
     if (result.success && result.leveledUp) {
@@ -124,6 +175,10 @@ async function handleLeveling(message, client) {
   }
 }
 
+
+// ==========================================
+// 📨 DM SUBMISSION LOGIC
+// ==========================================
 async function handleDMSubmission(message, client) {
   try {
     // find guilds with active competition
@@ -195,5 +250,3 @@ async function handleDMSubmission(message, client) {
     logger.error('Error handling DM submission:', error);
   }
 }
-
-
