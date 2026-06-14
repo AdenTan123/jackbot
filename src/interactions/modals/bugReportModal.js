@@ -3,9 +3,12 @@ import { logger } from '../../utils/logger.js';
 import { createEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
-// Exporting as default so your bot's modal handler automatically loads it
 export default {
+  // Providing all three variants to ensure the interaction loader accepts it
+  id: 'bugReportModal',
+  name: 'bugReportModal',
   customId: 'bugReportModal',
+  
   async execute(interaction) {
     logger.info('bugReportModal.execute – received submission');
     try {
