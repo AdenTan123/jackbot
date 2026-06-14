@@ -1,9 +1,6 @@
-import { MessageFlags } from 'discord.js';
+import { EmbedBuilder, MessageFlags } from 'discord.js';
 import { logger } from '../../utils/logger.js';
-import { createEmbed } from '../../utils/embeds.js';
-import { InteractionHelper } from '../../utils/interactionHelper.js';
 
-// Define the modal handler object
 export const bugReportModal = {
   name: 'bugReportModal',
 
@@ -11,42 +8,54 @@ export const bugReportModal = {
     logger.info('bugReportModal.execute – received submission');
     
     try {
-      // Collect the fields
-      const description = interaction.fields.getTextInputValue('description').trim();
-      const reproduce = interaction.fields.getTextInputValue('reproduce').trim();
-      const device = interaction.fields.getTextInputValue('device').trim();
-      
-      const extraRaw = interaction.fields.getTextInputValue('extra');
-      const extra = extraRaw ? extraRaw.trim() : 'None';
+      const fields = interaction.fields;
 
-      const reportEmbed = createEmbed({
-        title: '🐞 New Bug Report',
-        description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra}`,
-        color: 'warning',
-      });
+      // Safe extraction: If custom IDs don't match perfectly, this handles it gracefully instead of crashing
+      const description = (fields.fields.get('description')?.value || fields.fields.get('bug_description')?.value || '').trim();
+      const reproduce = (fields.fields.get('reproduce')?.value || fields.fields.get('bug_reproduce')?.value || '').trim();
+      const device = (fields.fields.get('device')?.value || fields.fields.get('bug_device')?.value || '').trim();
+      const extra = (fields.fields.get('extra')?.value || fields.fields.get('bug_extra')?.value || 'None').trim();
 
-      // Safely grab client directly from the interaction object 
-      // since the hotfix doesn't pass it as an argument!
+      // Build the embed using standard Discord.js methods (exactly like your marizma script)
+      const reportEmbed = new EmbedBuilder()
+        .setTitle('🐞 New Bug Report')
+        .setDescription(`**Description:**\n${description || 'Not provided'}\n\n**Reproduce:**\n${reproduce || 'Not provided'}\n\n**Device:** ${device || 'Not provided'}\n\n**Extra:** ${extra}`)
+        .setColor(0xff9900); // Amber warning color
+
       const client = interaction.client;
       const channelId = process.env.BUG_REPORT_CHANNEL_ID;
-      const channel = client.channels.cache.get(channelId);
+      
+      if (!channelId) {
+        throw new Error('BUG_REPORT_CHANNEL_ID is missing from your environment variables (.env)');
+      }
+
+      // Fetch or get the channel safely
+      const channel = client.channels.cache.get(channelId) || await client.channels.fetch(channelId).catch(() => null);
       
       if (channel) {
         await channel.send({ embeds: [reportEmbed] });
+        logger.info(`Bug report sent successfully to channel ${channelId}`);
       } else {
-        logger.warn('Bug report channel not found', { channelId });
+        logger.warn(`Bug report channel (${channelId}) could not be located.`);
       }
 
-      await InteractionHelper.safeReply(interaction, {
+      // Pure discord.js interaction response
+      await interaction.reply({
         content: 'Thank you! Your bug report has been submitted.',
         flags: MessageFlags.Ephemeral,
       });
       
     } catch (error) {
-      logger.error('bugReportModal.execute – error', { error });
+      // Force print the actual error message and stack trace to the console
+      logger.error('bugReportModal.execute – critical error details:', {
+        message: error.message,
+        stack: error.stack
+      });
+      console.error(error); 
+
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
-          content: '❌ An internal error occurred while processing your report. Please try again later.',
+          content: `❌ An internal error occurred.\n*Details: ${error.message}*`,
           flags: MessageFlags.Ephemeral,
         }).catch(() => null);
       }
@@ -54,5 +63,4 @@ export const bugReportModal = {
   },
 };
 
-// Satisfies BOTH the custom hotfix (named) AND the bot loader (default)
 export default bugReportModal;
