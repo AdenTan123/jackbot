@@ -72,7 +72,7 @@ export default {
           .setDescription('Allow simple math expressions like "4+1" (Y/N)')
           .setRequired(true)
           .addChoices({ name: 'Yes', value: 'Y' }, { name: 'No', value: 'N' }))
-      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)),
+    ), // Removed the invalid setDefaultMemberPermissions here
 
   category: 'admin',
 
@@ -158,6 +158,11 @@ export default {
 
       // ── COUNTING ───────────────────────────────────────────
       if (sub === 'counting') {
+        // If you need strict Administrator access for just this subcommand, uncomment the lines below:
+        // if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
+        //   throw new Error('You must have Administrator permissions to set up the counting channel.');
+        // }
+
         const channelId = interaction.options.getString('channelid', true).trim();
         const deleteNonWords = interaction.options.getString('deletenonwords', true) === 'Y';
         const allowMath = interaction.options.getString('math', true) === 'Y';
@@ -174,7 +179,8 @@ export default {
           lastUserId: null,
         };
 
-        await setGuildConfig(client, interaction.guildId, updated);
+        // Fixed method name here:
+        await updateGuildConfig(client, interaction.guildId, updated);
         logger.info('Counting config saved', { guildId: interaction.guildId, channelId, deleteNonWords, allowMath });
 
         const embed = successEmbed('✅ Counting channel configured');
