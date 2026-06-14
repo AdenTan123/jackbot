@@ -124,7 +124,6 @@ export default {
         } else if (interaction.isAutocomplete()) {
           const command = client.commands.get(interaction.commandName);
 
-          // Generic routing — if command has autocomplete() method, use it
           if (command?.autocomplete) {
             try {
               const guildConfig = interaction.guild
@@ -138,7 +137,6 @@ export default {
             return;
           }
 
-          // Legacy: reactroles specific handler
           if (interaction.commandName === 'reactroles') {
             const focusedOption = interaction.options.getFocused(true);
             if (focusedOption.name === 'panel') {
@@ -296,12 +294,28 @@ export default {
             return;
           }
 
+          // 👇 BUG REPORT MODAL FIX 👇
+          if (interaction.customId === 'bugReportModal') {
+            try {
+              const { bugReportModal } = await import('../interactions/modals/bugReportModal.js');
+              await bugReportModal.execute(interaction);
+            } catch (error) {
+              await handleInteractionError(interaction, error, withTraceContext({
+                type: 'modal',
+                customId: interaction.customId,
+                handler: 'bugReport'
+              }, interactionTraceContext));
+            }
+            return;
+          }
+          // 👆 END BUG REPORT MODAL FIX 👆
+
           const [customId, ...args] = interaction.customId.split(':');
           const modal = client.modals.get(customId);
 
           if (!modal) {
             if (!interaction.customId.includes(':')) {
-              return;
+              return; // We safely hit this for custom IDs that aren't mapped properly
             }
             throw createError(
               `No modal handler found for ${customId}`,

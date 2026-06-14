@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, MessageFlags, ModalBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
+import { SlashCommandBuilder } from 'discord.js';
 import { createEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { createBugReportModal } from '../../interactions/modals/bugReportModal.js';
@@ -39,13 +39,5 @@ export default {
       });
       await InteractionHelper.safeReply(interaction, { embeds: [viewEmbed] });
     }
-  },
-
-  // Forward modal submissions to the handler defined in the modal file
-  async modalSubmit(interaction) {
-    const { bugReportModal } = await import('../../interactions/modals/bugReportModal.js');
-    if (bugReportModal && typeof bugReportModal.execute === 'function') {
-      await bugReportModal.execute(interaction);
-    }
-  },
+  }
 };

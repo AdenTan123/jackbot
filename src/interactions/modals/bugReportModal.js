@@ -1,5 +1,7 @@
-import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle } from 'discord.js';
-import { Logger } from '../../utils/logger.js'; // <-- added logger import
+import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
+import { Logger } from '../../utils/logger.js'; 
+import { createEmbed } from '../../utils/embeds.js';
+import { InteractionHelper } from '../../utils/interactionHelper.js';
 
 /**
  * Constructs the bug report modal used by the /bug report command.
@@ -67,11 +69,6 @@ export const bugReportModal = {
 
       Logger.debug('Collected fields', { description, reproduce, device, extra });
 
-      const { createEmbed } = await import('../../utils/embeds.js');
-      const { InteractionHelper } = await import('../../utils/interactionHelper.js');
-      const { MessageFlags } = await import('discord.js');
-      Logger.info('Dynamic imports finished');
-
       const reportEmbed = createEmbed({
         title: '🐞 New Bug Report',
         description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra || 'None'}`,
@@ -81,6 +78,7 @@ export const bugReportModal = {
 
       const channelId = process.env.BUG_REPORT_CHANNEL_ID;
       Logger.debug('Bug report channel ID from env', { channelId });
+      
       const channel = interaction.client.channels.cache.get(channelId);
       if (channel) {
         await channel.send({ embeds: [reportEmbed] });

@@ -1,0 +1,118 @@
+  <style>
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; background: #f4f4f4; }
+    .container { max-width: 1000px; margin: 20px auto; background: #fff; padding: 30px; border-radius: 8px; }
+    .side-nav { width: 200px; background: #f0f0f0; padding: 20px; border-right: 1px solid #ddd; }
+    .side-nav a { display: block; padding: 10px; text-decoration: none; color: #333; }
+    .side-nav a:hover { background: #e0e0e0; }
+    .main-content { padding: 20px; }
+    h1, h2 { color: #2c3e50; }
+    table { width: 100%; border-collapse: collapse; margin-top: 20px; }
+    th, td { border: 1px solid #ddd; padding: 10px; text-align: left; }
+    th { background-color: #f9f9f9; }
+  </style>
+
+   <div class="container">
+    <!-- Sidebar Navigation -->
+    <nav class="side-nav">
+      <h3>📚 Navigation</h3>
+      <ul>
+        <li><a href="#welcome" data-doc="welcome">👋 Welcome</a></li>
+        <li><a href="#setup" data-doc="setup">🔧 Setup & Configuration</a></li>
+        <li><a href="#marizma" data-doc="marizma">🏥 Marizma Integration</a></li>
+        <li><a href="#tickets" data-doc="tickets">🎟️ Ticket System</a></li>
+        <li><a href="#commands" data-doc="commands">🧠 Slash Commands</a></li>
+      </ul>
+    </nav>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <div id="content"></div>
+      <div class="toc" id="toc"></div>
+    </main>
+
+    <script>
+      const docs = {
+        welcome: `
+          <h1>👋 Welcome to Jackbot</h1>
+          <p>A powerful Discord bot for managing communities at scale. This guide covers setup, integrations, and all commands.</p>
+          <p><strong>Current Version:</strong> v1.4.4</p>
+        `,
+        setup: `
+          <h2>🔧 Setup & Configuration</h2>
+          <p>Invite Jackbot with the <a href="your-invite-link">OAuth2 URL</a> and grant it these permissions:</p>
+          <ul>
+            <li>Administrator (recommended) or custom roles with: Manage Roles, Send Messages, Use Slash Commands</li>
+          </ul>
+          <p><strong>Example:</strong></p>
+          <pre><code>/setup #modlog #welcome channel=#general language=en</code></pre>
+        `,
+        marizma: `
+          <h2>🏥 Maryma Integration</h2>
+          <p>Connect your Maple Hospital server to Discord for patient status updates, workflow automation, and more.</p>
+          <h3>Commands</h3>
+          <ul>
+            <li>/marizma status @user - Check patient status</li>
+            <li>/marizma patient id:123 - View patient details</li>
+            <li>/marizma sync all - Sync data across servers</li>
+          </ul>
+          <p><strong>Requires:</strong> API key from your Marmysa admin panel.</p>
+        `,
+        tickets: `
+          <h2>🎟️ Ticket System</h2>
+          <p>Create and manage support tickets with transcripts, staff assignments, and automated routing.</p>
+          <h3>Setup</h3>
+          <pre><code>/ticket setup #support-category</code></pre>
+          <p>Users open tickets via <code>/ticket open [title]</code>. Staff can close, claim, or view logs.</p>
+        `,
+        commands: `
+          <h2>🧠 Slash Commands Reference</h2>
+          <table>
+            <thead>
+              <tr><th>Command</th><th>Description</th></tr>
+            </thead>
+            <tbody>
+              <tr><td><code>/mod</code></td><td>Ban or kick members</td></tr>
+              <tr><td><code>/warn @user</code></td><td>Issue a warning to a user</td></tr>
+              <tr><td><code>/sync</code></td><td>Synchronize roles across guilds</td></tr>
+              <tr><td><code>/stats</code></td><td>Get server analytics</td></tr>
+              <tr><td><code>/config</code></td><td>Adjust bot settings</td></tr>
+              <tr><td><code>/config counting</code></td><td>Setup a counting channel (admin only)</td></tr>
+            </tbody>
+          </table>
+        `,
+      };
+
+      function loadDoc(pageId) {
+        const content = docs[pageId] || docs.welcome;
+        document.getElementById('content').innerHTML = content;
+        generateTOC();
+      }
+
+      function generateTOC() {
+        const headings = document.querySelectorAll('#content h2');
+        const toc = document.getElementById('toc');
+        toc.innerHTML = '<h3>📌 Table of Contents</h3><ul>';
+        headings.forEach(h => {
+          const text = h.innerText;
+          const id = text.toLowerCase().replace(/ /g, '-');
+          h.id = id;
+          toc.innerHTML += `<li><a href="#${id}">${text}</a></li>`;
+        });
+        toc.innerHTML += '</ul>';
+      }
+
+      // Initial load
+      loadDoc('welcome');
+
+      // Handle clicks
+      document.querySelectorAll('.side-nav a').forEach(link => {
+        link.addEventListener('click', e => {
+          e.preventDefault();
+          const docId = link.getAttribute('data-doc');
+          loadDoc(docId);
+        });
+      });
+    </script>
+  </div>
+
+  
