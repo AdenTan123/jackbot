@@ -3,11 +3,11 @@ import { logger } from '../../utils/logger.js';
 import { createEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
-export default {
-  // We use exactly and ONLY 'name', perfectly matching your customId in bug.js
+// Define the modal handler object
+export const bugReportModal = {
   name: 'bugReportModal',
 
-  async execute(interaction, client) {
+  async execute(interaction) {
     logger.info('bugReportModal.execute – received submission');
     
     try {
@@ -16,7 +16,6 @@ export default {
       const reproduce = interaction.fields.getTextInputValue('reproduce').trim();
       const device = interaction.fields.getTextInputValue('device').trim();
       
-      // 'extra' is not required, so we handle if it's blank
       const extraRaw = interaction.fields.getTextInputValue('extra');
       const extra = extraRaw ? extraRaw.trim() : 'None';
 
@@ -26,7 +25,9 @@ export default {
         color: 'warning',
       });
 
-      // Get the channel using the client object passed by your framework
+      // Safely grab client directly from the interaction object 
+      // since the hotfix doesn't pass it as an argument!
+      const client = interaction.client;
       const channelId = process.env.BUG_REPORT_CHANNEL_ID;
       const channel = client.channels.cache.get(channelId);
       
@@ -52,3 +53,6 @@ export default {
     }
   },
 };
+
+// Satisfies BOTH the custom hotfix (named) AND the bot loader (default)
+export default bugReportModal;
