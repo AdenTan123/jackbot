@@ -4,27 +4,31 @@ import { createEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
 export default {
-  // Providing all three variants to ensure the interaction loader accepts it
-  id: 'bugReportModal',
+  // We use exactly and ONLY 'name', perfectly matching your customId in bug.js
   name: 'bugReportModal',
-  customId: 'bugReportModal',
-  
-  async execute(interaction) {
+
+  async execute(interaction, client) {
     logger.info('bugReportModal.execute – received submission');
+    
     try {
-      const description = interaction.fields.getTextInputValue('description');
-      const reproduce = interaction.fields.getTextInputValue('reproduce');
-      const device = interaction.fields.getTextInputValue('device');
-      const extra = interaction.fields.getTextInputValue('extra');
+      // Collect the fields
+      const description = interaction.fields.getTextInputValue('description').trim();
+      const reproduce = interaction.fields.getTextInputValue('reproduce').trim();
+      const device = interaction.fields.getTextInputValue('device').trim();
+      
+      // 'extra' is not required, so we handle if it's blank
+      const extraRaw = interaction.fields.getTextInputValue('extra');
+      const extra = extraRaw ? extraRaw.trim() : 'None';
 
       const reportEmbed = createEmbed({
         title: '🐞 New Bug Report',
-        description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra || 'None'}`,
+        description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra}`,
         color: 'warning',
       });
 
+      // Get the channel using the client object passed by your framework
       const channelId = process.env.BUG_REPORT_CHANNEL_ID;
-      const channel = interaction.client.channels.cache.get(channelId);
+      const channel = client.channels.cache.get(channelId);
       
       if (channel) {
         await channel.send({ embeds: [reportEmbed] });
@@ -42,7 +46,7 @@ export default {
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
           content: '❌ An internal error occurred while processing your report. Please try again later.',
-          ephemeral: true,
+          flags: MessageFlags.Ephemeral,
         }).catch(() => null);
       }
     }
