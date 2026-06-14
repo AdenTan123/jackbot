@@ -1,5 +1,5 @@
 import { ModalBuilder, ActionRowBuilder, TextInputBuilder, TextInputStyle, MessageFlags } from 'discord.js';
-import { Logger } from '../../utils/logger.js'; 
+import { logger } from '../../utils/logger.js'; // 🌟 Fixed: Changed Logger to logger
 import { createEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
@@ -9,7 +9,7 @@ import { InteractionHelper } from '../../utils/interactionHelper.js';
  * @returns {ModalBuilder} The configured modal instance.
  */
 export function createBugReportModal() {
-  Logger.info('createBugReportModal – building modal');
+  logger.info('createBugReportModal – building modal');
   const modal = new ModalBuilder()
     .setCustomId('bugReportModal')
     .setTitle('Bug Report');
@@ -49,7 +49,7 @@ export function createBugReportModal() {
     new ActionRowBuilder().addComponents(extra)
   );
 
-  Logger.info('createBugReportModal – modal built');
+  logger.info('createBugReportModal – modal built');
   return modal;
 }
 
@@ -60,40 +60,40 @@ export function createBugReportModal() {
 export const bugReportModal = {
   customId: 'bugReportModal',
   async execute(interaction) {
-    Logger.info('bugReportModal.execute – received submission');
+    logger.info('bugReportModal.execute – received submission');
     try {
       const description = interaction.fields.getTextInputValue('description');
       const reproduce = interaction.fields.getTextInputValue('reproduce');
       const device = interaction.fields.getTextInputValue('device');
       const extra = interaction.fields.getTextInputValue('extra');
 
-      Logger.debug('Collected fields', { description, reproduce, device, extra });
+      logger.debug('Collected fields', { description, reproduce, device, extra });
 
       const reportEmbed = createEmbed({
         title: '🐞 New Bug Report',
         description: `**Description:**\n${description}\n\n**Reproduce:**\n${reproduce}\n\n**Device:** ${device}\n\n**Extra:** ${extra || 'None'}`,
         color: 'warning',
       });
-      Logger.info('Report embed created');
+      logger.info('Report embed created');
 
       const channelId = process.env.BUG_REPORT_CHANNEL_ID;
-      Logger.debug('Bug report channel ID from env', { channelId });
+      logger.debug('Bug report channel ID from env', { channelId });
       
       const channel = interaction.client.channels.cache.get(channelId);
       if (channel) {
         await channel.send({ embeds: [reportEmbed] });
-        Logger.info('Report embed sent to channel');
+        logger.info('Report embed sent to channel');
       } else {
-        Logger.warn('Bug report channel not found or not cached', { channelId });
+        logger.warn('Bug report channel not found or not cached', { channelId });
       }
 
       await InteractionHelper.safeReply(interaction, {
         content: 'Thank you! Your bug report has been submitted.',
         flags: MessageFlags.Ephemeral,
       });
-      Logger.info('User acknowledged with ephemeral reply');
+      logger.info('User acknowledged with ephemeral reply');
     } catch (error) {
-      Logger.error('bugReportModal.execute – error processing submission', { error });
+      logger.error('bugReportModal.execute – error processing submission', { error });
       // If we haven't already replied, send an error message
       if (!interaction.replied && !interaction.deferred) {
         await interaction.reply({
