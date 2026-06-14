@@ -5,6 +5,10 @@ import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js
 import { logger } from '../../utils/logger.js';
 
 export default {
+  // Existing subcommands...
+  // Added counting configuration subcommand
+  // NOTE: This mirrors src/commands/Integration/counting.js for admin use
+
   data: new SlashCommandBuilder()
     .setName('config')
     .setDescription('Configure bot settings for this server')
@@ -49,7 +53,26 @@ export default {
           { name: 'Mod Log Channel', value: 'modLogChannelId' },
           { name: 'Ticket Category', value: 'ticketCategoryId' },
           { name: 'Ticket Log Channel', value: 'ticketLogChannelId' },
-        ))),
+        )))
+
+    .addSubcommand(sub => sub
+      .setName('counting')
+      .setDescription('Setup a counting channel')
+      .addStringOption(opt =>
+        opt.setName('channelid')
+          .setDescription('ID of the channel for counting')
+          .setRequired(true))
+      .addStringOption(opt =>
+        opt.setName('deletenonwords')
+          .setDescription('Delete messages that are not numbers or allowed math (Y/N)')
+          .setRequired(true)
+          .addChoices({ name: 'Yes', value: 'Y' }, { name: 'No', value: 'N' }))
+      .addStringOption(opt =>
+        opt.setName('math')
+          .setDescription('Allow simple math expressions like "4+1" (Y/N)')
+          .setRequired(true)
+          .addChoices({ name: 'Yes', value: 'Y' }, { name: 'No', value: 'N' }))
+      .setDefaultMemberPermissions(PermissionFlagsBits.Administrator)),
 
   category: 'admin',
 
@@ -131,6 +154,35 @@ export default {
         return InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(`Cleared config key \`${key}\`.`, '✅ Config Cleared')],
         });
+      }
+
+      // ── COUNTING ───────────────────────────────────────────
+      if (sub === 'counting') {
+        const channelId = interaction.options.getString('channelid', true).trim();
+        const deleteNonWords = interaction.options.getString('deletenonwords', true) === 'Y';
+        const allowMath = interaction.options.getString('math', true) === 'Y';
+
+        // Load existing guild config (or create a fresh object)
+        const guildConfig = await getGuildConfig(client, interaction.guildId).catch(() => ({}));
+        const updated = { ...guildConfig };
+        updated.counting = {
+          channelId,
+          deleteNonWords,
+          allowMath,
+          // runtime state – persisted between restarts
+          lastNumber: 0,
+          lastUserId: null,
+        };
+
+        await setGuildConfig(client, interaction.guildId, updated);
+        logger.info('Counting config saved', { guildId: interaction.guildId, channelId, deleteNonWords, allowMath });
+
+        const embed = successEmbed('✅ Counting channel configured');
+        embed.addFields({ name: 'Channel', value: `<#${channelId}>`, inline: true });
+        embed.addFields({ name: 'Delete non‑words', value: deleteNonWords ? 'Yes' : 'No', inline: true });
+        embed.addFields({ name: 'Allow math', value: allowMath ? 'Yes' : 'No', inline: true });
+
+        return InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
       }
 
     } catch (error) {
