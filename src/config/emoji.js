@@ -1,18 +1,19 @@
+// holds full emoji strings for text messages and embeds
 export const EMOJIS = {
-    danger: '<:danger:1516075817526890696>',
-    check: '<:check:1516075519416865038>',
-    cross: '<:cross:1516075422343757994>',
-    information: '<:information:1516075287065006202>',
-    warning: '<:warning:1516075144525775052>',
-    brand: '<:jackbot:1516074943983652968>' // Your unlabeled custom icon
+    check: '<:custom_check:123456789012345678>',      // Replace with your custom check emoji tag
+    cross: '<:custom_cross:123456789012345678>',      // Replace with your custom cross emoji tag
+    warning: '<:custom_warning:123456789012345678>',  // Replace with your custom warning emoji tag
+    danger: '<:custom_danger:123456789012345678>',    // Replace with your custom danger emoji tag
+    brand: '<:custom_brand:123456789012345678>',      // Replace with your custom brand emoji tag
+    information: '<:custom_info:123456789012345678>'  // Replace with your custom info emoji tag
 };
 
-// Raw IDs for button components (.setEmoji() accepts pure string IDs)
+// holds pure numeric IDs required specifically for Discord Button components
 export const EMOJI_IDS = {
-    danger: '1516075817526890696',
-    check: '1516075519416865038',
-    cross: '1516075422343757994',
-    information: '1516075287065006202',
-    warning: '1516075144525775052',
-    brand: '1516074943983652968'
+    check: '123456789012345678',       // Pure ID for check button
+    cross: '123456789012345678',       // Pure ID for cross button
+    warning: '123456789012345678',     // Pure ID for warning button
+    danger: '123456789012345678',      // Pure ID for danger button
+    brand: '123456789012345678',       // Pure ID for brand button
+    information: '123456789012345678'  // Pure ID for info button
 };
