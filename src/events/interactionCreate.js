@@ -1,103 +1,134 @@
-import { PermissionFlagsBits } from 'discord.js';
+import { PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder } from 'discord.js';
 import { getGuildConfig, updateGuildConfig } from '../services/guildConfig.js';
 import { successEmbed, errorEmbed, warningEmbed } from '../utils/embeds.js';
 
 export default {
   name: 'interactionCreate',
   async execute(interaction) {
-    
-    // ── INTERACTION ROUTING: SLASH COMMANDS ───────────────────
+
+    // ── 1. SLASH COMMANDS ROUTER ──────────────────────────────
     if (interaction.isChatInputCommand()) {
       const command = interaction.client.commands.get(interaction.commandName);
       if (!command) return;
-      try {
-        await command.execute(interaction);
-      } catch (error) {
-        console.error(error);
-      }
+      try { await command.execute(interaction); } catch (e) { console.error(e); }
       return;
     }
 
-    // ── INTERACTION ROUTING: BUTTONS ──────────────────────────
-    if (interaction.isButton()) {
-      // Break the custom ID string apart (e.g., 'shift:join:SH-123456')
-      const [prefix, action, shiftId] = interaction.customId.split(':');
+    // ── 2. MODAL POP-UP SUBMISSIONS ───────────────────────────
+    if (interaction.isModalSubmit()) {
+      const [prefix, action, targetId] = interaction.customId.split(':');
+      if (prefix !== 'shiftmodal') return;
+
+      await interaction.deferReply({ ephemeral: true });
       
-      // If the button wasn't created by our shift command, ignore it completely
+      const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
+      cfg.userShifts = cfg.userShifts || {};
+      const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
+      
+      const inputMinutes = parseInt(interaction.fields.getTextInputValue('minutes_input'), 10);
+      if (isNaN(inputMinutes) || inputMinutes < 0) {
+        return interaction.editReply({ embeds: [errorEmbed('Please input a valid positive whole number of minutes.')] });
+      }
+
+      if (action === 'set') {
+        shift.duration = inputMinutes;
+      } else if (action === 'add') {
+        shift.duration += inputMinutes;
+      } else if (action === 'dec') {
+        shift.duration = Math.max(0, shift.duration - inputMinutes);
+      }
+
+      cfg.userShifts[targetId] = shift;
+      await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
+
+      return interaction.editReply({ 
+        embeds: [successEmbed(`Successfully adjusted <@${targetId}>'s total shift time to **${shift.duration} minutes**.`)] 
+      });
+    }
+
+    // ── 3. BUTTON CLICK ACTIONS ───────────────────────────────
+    if (interaction.isButton()) {
+      const [prefix, scope, action, targetId] = interaction.customId.split(':');
       if (prefix !== 'shift') return;
 
-      // Defer the button reaction immediately so Discord doesn't show an interaction error
-      await interaction.deferReply({ ephemeral: true });
+      // Special Gate: Modals CANNOT be responded to with a deferred reply. 
+      // If we are throwing a modal popup, don't trigger interaction.deferReply yet!
+      const isModalAction = ['set', 'add', 'dec'].includes(action);
+      if (!isModalAction) {
+        await interaction.deferReply({ ephemeral: true });
+      }
 
       try {
         const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
-        const shifts = Array.isArray(cfg.shifts) ? cfg.shifts : [];
-        const shift = shifts.find(s => s.id === shiftId);
+        cfg.userShifts = cfg.userShifts || {};
+        const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
 
-        if (!shift) {
-          return interaction.editReply({ embeds: [errorEmbed('This shift no longer exists in the system.')] });
-        }
-
-        const saveShifts = async (newShifts) => {
-          await updateGuildConfig(interaction.client, interaction.guildId, { shifts: newShifts });
+        const save = async () => {
+          cfg.userShifts[targetId] = shift;
+          await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
         };
 
-        const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageGuild);
-
-        // ── BUTTON INTERACTION: JOIN ────────────────────────────
-        if (action === 'join') {
-          if (shift.mode !== 'active') {
-            return interaction.editReply({ embeds: [errorEmbed(`This shift is currently **${shift.mode}** and cannot be joined.`)] });
-          }
-          const alreadyIn = shift.participants.some(p => p.userId === interaction.user.id);
-          if (alreadyIn) {
-            return interaction.editReply({ embeds: [warningEmbed('You are already registered in this shift.')] });
-          }
-          if (shift.quota && shift.participants.length >= shift.quota) {
-            return interaction.editReply({ embeds: [errorEmbed('This shift has already hit its staff quota limit.')] });
-          }
-
-          shift.participants.push({ userId: interaction.user.id, joinedAt: new Date().toISOString() });
-          await saveShifts(shifts);
-          
-          return interaction.editReply({ embeds: [successEmbed(`You have successfully joined **${shift.title}**!`)] });
+        // Security check for admin scope
+        if (scope === 'admin' && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+          return interaction.editReply({ embeds: [errorEmbed('Access Denied: You do not have permissions to modify sheets.')] });
         }
 
-        // ── BUTTON INTERACTION: LEAVE ───────────────────────────
-        if (action === 'leave') {
-          const before = shift.participants.length;
-          shift.participants = shift.participants.filter(p => p.userId !== interaction.user.id);
-
-          if (shift.participants.length === before) {
-            return interaction.editReply({ embeds: [warningEmbed('You are not clocked into this shift.')] });
+        // ── BUTTON CLICK: START ─────────────────────────────────
+        if (action === 'start') {
+          if (shift.status === 'Active') {
+            return interaction.editReply({ embeds: [warningEmbed('This profile is already clocked into an active shift.')] });
           }
-
-          await saveShifts(shifts);
-          return interaction.editReply({ embeds: [successEmbed(`You have left **${shift.title}**.`)] });
+          shift.status = 'Active';
+          shift.startedAt = new Date().toISOString();
+          await save();
+          return interaction.editReply({ embeds: [successEmbed(`<@${targetId}> has successfully clocked into their shift.`)] });
         }
 
-        // ── BUTTON INTERACTION: END ─────────────────────────────
+        // ── BUTTON CLICK: END ───────────────────────────────────
         if (action === 'end') {
-          if (shift.creatorId !== interaction.user.id && !isAdmin) {
-            return interaction.editReply({ embeds: [errorEmbed('Only the shift host or an admin can end this shift.')] });
+          if (shift.status !== 'Active') {
+            return interaction.editReply({ embeds: [warningEmbed('This profile does not have an active shift running.')] });
           }
-          if (shift.mode === 'ended') {
-            return interaction.editReply({ embeds: [warningEmbed('This shift has already been closed.')] });
-          }
+          
+          // Math: calculate active minutes elapsed
+          const elapsedMs = new Date() - new Date(shift.startedAt);
+          const elapsedMinutes = Math.floor(elapsedMs / 60000);
 
-          shift.mode = 'ended';
-          shift.endedAt = new Date().toISOString();
-          await saveShifts(shifts);
+          shift.status = 'Inactive';
+          shift.duration += elapsedMinutes;
+          shift.startedAt = null;
+          await save();
 
-          // Clear the physical buttons off the old embed message so people stop clicking them
-          await interaction.message.edit({ components: [] }).catch(() => null);
+          return interaction.editReply({ 
+            embeds: [successEmbed(`<@${targetId}> has clocked out! Added **${elapsedMinutes}m** to records. Total: **${shift.duration}m**.`)] 
+          });
+        }
 
-          return interaction.editReply({ embeds: [successEmbed(`Shift **${shift.title}** has been closed.`)] });
+        // ── BUTTON CLICK: TRIGGER MODAL POPUPS (SET/ADD/DECREASE) ──
+        if (isModalAction) {
+          const modalTitles = { set: 'Set Total Time', add: 'Add Time Record', dec: 'Decrease Time Record' };
+          const modalFields = { set: 'Enter exact minutes total:', add: 'Minutes to add:', dec: 'Minutes to subtract:' };
+
+          const modal = new ModalBuilder()
+            .setCustomId(`shiftmodal:${action}:${targetId}`)
+            .setTitle(modalTitles[action]);
+
+          const minutesInput = new TextInputBuilder()
+            .setCustomId('minutes_input')
+            .setLabel(modalFields[action])
+            .setStyle(TextInputStyle.Short)
+            .setPlaceholder('e.g. 45')
+            .setRequired(true);
+
+          modal.addComponents(new ActionRowBuilder().addComponents(minutesInput));
+          return await interaction.showModal(modal);
         }
 
       } catch (error) {
-        console.error('Persistent button error:', error);
-        return interaction.editReply({ embeds: [errorEmbed('An internal error occurred while handling this click.')] });
+        console.error('System process crash:', error);
+        if (!isModalAction) {
+          return interaction.editReply({ embeds: [errorEmbed('A critical failure occurred during state mapping.')] });
+        }
       }
     }
   },
