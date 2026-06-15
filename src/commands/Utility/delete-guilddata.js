@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
+import { SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, EmbedBuilder } from 'discord.js';
 import { EMOJI_IDS } from '../../config/emojis.js';
 
 export default {
@@ -10,11 +10,18 @@ export default {
     async execute(interaction) {
         // Administrative safeguard check
         if (!interaction.member.permissions.has('Administrator')) {
-            return interaction.reply({
+            return interaction.editReply({
                 content: '❌ You do not have permission to use this command. (Requires Administrator)',
-                ephemeral: true
+                components: []
             });
         }
+
+        // Create a clean warning embed
+        const warningEmbed = new EmbedBuilder()
+            .setColor('#FF0000') // Red danger theme
+            .setTitle('⚠️ CRITICAL WARNING: Database Purge')
+            .setDescription('Proceeding will completely wipe all server logs, configurations, and settings from our database.\n\nThis action is **completely irreversible**. Are you absolutely sure you want to proceed?')
+            .setTimestamp();
 
         // Build Confirmation Button
         const confirmButton = new ButtonBuilder()
@@ -32,11 +39,10 @@ export default {
 
         const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
 
-        // Send confirmation prompt to user
-        await interaction.reply({
-            content: '⚠️ **CRITICAL WARNING:** Proceeding will completely wipe all server logs, configurations, and settings from our database. This action is entirely irreversible.\n\nAre you absolutely sure you want to proceed?',
-            components: [row],
-            ephemeral: true
+        // We use editReply here because your framework already handled the deferral!
+        await interaction.editReply({
+            embeds: [warningEmbed],
+            components: [row]
         });
     }
 };

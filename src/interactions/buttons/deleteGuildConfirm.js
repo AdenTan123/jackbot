@@ -4,18 +4,15 @@ export default {
     name: 'delete_guild_confirm',
 
     async execute(interaction) {
-        // Fetch the user object of whoever initialized the parent slash command
-        const originalUser = interaction.message.interaction?.user;
-
-        // Block unauthorized interaction attempts
-        if (originalUser && interaction.user.id !== originalUser.id) {
+        // Security check: Ensure the clicker is still an Administrator
+        if (!interaction.member.permissions.has('Administrator')) {
             return interaction.reply({
-                content: `❌ This operation belongs to ${originalUser.username}. You cannot interact with it.`,
+                content: '❌ Only administrators can confirm database purges.',
                 ephemeral: true
             });
         }
 
-        // Immediately defer the update since database wipes take time
+        // Acknowledge the button click immediately
         await interaction.deferUpdate();
 
         try {
@@ -24,10 +21,11 @@ export default {
             // Example: await db.query('DELETE FROM guilds WHERE id = $1', [interaction.guildId]);
             // --------------------------------------------------------
 
-            // Update original prompt indicating absolute execution success
+            // Update the original response, clearing out the old embed and replacing the components
             await interaction.editReply({
                 content: `${EMOJIS.check} **Success:** All database structures associated with this guild have been permanently purged.`,
-                components: [] // Removes buttons from layout
+                embeds: [], 
+                components: [] 
             });
 
         } catch (error) {
@@ -35,6 +33,7 @@ export default {
             
             await interaction.editReply({
                 content: `${EMOJIS.cross} **System Error:** An internal error blocked full execution of your database purge.`,
+                embeds: [],
                 components: []
             });
         }
