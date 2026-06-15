@@ -1,4 +1,4 @@
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { createEmbed, successEmbed, errorEmbed, warningEmbed } from '../../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
@@ -54,6 +54,13 @@ export default {
       .setName('pause')
       .setDescription('Pause a shift temporarily')
       .addStringOption(o => o.setName('id').setDescription('Shift ID').setRequired(true)))
+
+    // /shift extend
+    .addSubcommand(s => s
+      .setName('extend')
+      .setDescription('Extend the end time of an active shift')
+      .addStringOption(o => o.setName('id').setDescription('Shift ID').setRequired(true))
+      .addIntegerOption(o => o.setName('minutes').setDescription('Minutes to add to the shift duration').setRequired(true)))
 
     // /shift end
     .addSubcommand(s => s
@@ -111,9 +118,7 @@ export default {
         .addUserOption(o => o.setName('user').setDescription('User to remove').setRequired(true)))
       .addSubcommand(s => s
         .setName('reset')
-        .setDescription('Reset all shifts in this server')))
-
-    .setDefaultMemberPermissions(0),
+        .setDescription('Reset all shifts in this server'))),
 
   async execute(interaction) {
     const ok = await InteractionHelper.safeDefer(interaction);
@@ -132,11 +137,11 @@ export default {
 
       const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageGuild);
 
-      // ── ADMIN GROUP ────────────────────────────────────────────
+      // ── ADMIN GROUP SECURITY CHECK ─────────────────────────────
       if (group === 'admin') {
         if (!isAdmin) {
           return InteractionHelper.safeEditReply(interaction, {
-            embeds: [errorEmbed('You need **Manage Server** permission to use admin commands.', '❌ Forbidden')],
+            embeds: [errorEmbed('You need the **Manage Server** permission to use administrative shift actions.', '❌ Forbidden')],
           });
         }
 
@@ -188,7 +193,6 @@ export default {
             embeds: [errorEmbed(`<@${user.id}> is not a participant of this shift.`)],
           });
 
-          // Adjust their joinedAt timestamp to change their effective duration
           const adjustMs = minutes * 60000;
           participant.joinedAt = new Date(new Date(participant.joinedAt).getTime() - adjustMs).toISOString();
           await saveShifts(shifts);
@@ -265,6 +269,23 @@ export default {
           createdAt: new Date().toISOString(),
         };
 
+        // Build the physical buttons to attach below the embed
+        const row = new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setCustomId(`shift:join:${id}`)
+              .setLabel('Join Shift')
+              .setStyle(ButtonStyle.Success),
+            new ButtonBuilder()
+              .setCustomId(`shift:leave:${id}`)
+              .setLabel('Leave Shift')
+              .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+              .setCustomId(`shift:end:${id}`)
+              .setLabel('End Shift')
+              .setStyle(ButtonStyle.Danger)
+          );
+
         await saveShifts([shift, ...shifts]);
 
         return InteractionHelper.safeEditReply(interaction, {
@@ -280,9 +301,10 @@ export default {
               { name: '👥 Quota', value: quota === 0 ? 'Unlimited' : String(quota), inline: true },
               ...(description ? [{ name: '📝 Description', value: description, inline: false }] : []),
             ],
-            footer: { text: `Use /shift start ${id} to activate` },
+            footer: { text: 'You can use the buttons below or slash commands' },
             timestamp: true,
           })],
+          components: [row] // Put buttons into the channel!
         });
       }
 
@@ -309,7 +331,7 @@ export default {
 
         return InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(
-            `Shift **${shift.title}** (\`${id}\`) is now **active**.\nMembers can join with \`/shift join ${id}\`.`,
+            `Shift **${shift.title}** (\`${id}\`) is now **active**.\nMembers can join with the green button or \`/shift join ${id}\`.`,
             '▶️ Shift Started'
           )],
         });
@@ -344,6 +366,42 @@ export default {
         });
       }
 
+      // ── EXTEND ────────────────────────────────────────────────
+      if (sub === 'extend') {
+        const id = interaction.options.getString('id', true).trim();
+        const minutes = interaction.options.getInteger('minutes', true);
+        const shift = shifts.find(s => s.id === id);
+        if (!shift) return InteractionHelper.safeEditReply(interaction, { embeds: [errorEmbed(`No shift found with ID \`${id}\`.`)] });
+
+        if (shift.creatorId !== interaction.user.id && !isAdmin) {
+          return InteractionHelper.safeEditReply(interaction, {
+            embeds: [errorEmbed('Only the shift host or an admin can extend this shift.')],
+          });
+        }
+        if (shift.mode === 'ended') {
+          return InteractionHelper.safeEditReply(interaction, {
+            embeds: [errorEmbed('This shift has already ended and cannot be extended.')],
+          });
+        }
+        if (minutes <= 0) {
+          return InteractionHelper.safeEditReply(interaction, {
+            embeds: [errorEmbed('Please provide a positive value greater than 0 minutes to extend.')],
+          });
+        }
+
+        const end = new Date(shift.end);
+        end.setMinutes(end.getMinutes() + minutes);
+        shift.end = end.toISOString();
+        await saveShifts(shifts);
+
+        return InteractionHelper.safeEditReply(interaction, {
+          embeds: [successEmbed(
+            `Shift **${shift.title}** (\`${id}\`) end time has been extended by **${minutes} minutes**.\nNew end time: ${formatTimestamp(shift.end)}`,
+            '⏳ Shift Extended'
+          )],
+        });
+      }
+
       // ── END ───────────────────────────────────────────────────
       if (sub === 'end') {
         const id = interaction.options.getString('id', true).trim();
@@ -364,7 +422,6 @@ export default {
         shift.mode = 'ended';
         shift.endedAt = new Date().toISOString();
 
-        // Calculate duration for each participant
         const now = new Date();
         const participantSummary = (shift.participants || []).map(p => {
           const joined = new Date(p.joinedAt);
@@ -438,7 +495,7 @@ export default {
 
         if (shift.participants.length === before) {
           return InteractionHelper.safeEditReply(interaction, {
-            embeds: [warningEmbed('You are not in this shift.')],
+            warningEmbed: [warningEmbed('You are not in this shift.')],
           });
         }
 

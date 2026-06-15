@@ -1,377 +1,104 @@
-import { Events, MessageFlags, PermissionFlagsBits } from 'discord.js';
-import { logger } from '../utils/logger.js';
-import { getGuildConfig } from '../services/guildConfig.js';
-import { handleInteractionError, createError, ErrorTypes } from '../utils/errorHandler.js';
-import { MessageTemplates } from '../utils/messageTemplates.js';
-import { InteractionHelper } from '../utils/interactionHelper.js';
-import { createInteractionTraceContext, runWithTraceContext } from '../utils/traceContext.js';
-import { validateChatInputPayloadOrThrow } from '../utils/commandInputValidation.js';
-import { enforceAbuseProtection, formatCooldownDuration } from '../utils/abuseProtection.js';
-
-function withTraceContext(context = {}, traceContext = {}) {
-  return {
-    traceId: traceContext.traceId,
-    guildId: context.guildId || traceContext.guildId,
-    userId: context.userId || traceContext.userId,
-    command: context.commandName || traceContext.command,
-    ...context
-  };
-}
+import { PermissionFlagsBits } from 'discord.js';
+import { getGuildConfig, updateGuildConfig } from '../services/guildConfig.js';
+import { successEmbed, errorEmbed, warningEmbed } from '../utils/embeds.js';
 
 export default {
-  name: Events.InteractionCreate,
-  async execute(interaction, client) {
-    const interactionTraceContext = createInteractionTraceContext(interaction);
-    interaction.traceContext = interactionTraceContext;
-    interaction.traceId = interactionTraceContext.traceId;
-
-    return runWithTraceContext(interactionTraceContext, async () => {
+  name: 'interactionCreate',
+  async execute(interaction) {
+    
+    // ── INTERACTION ROUTING: SLASH COMMANDS ───────────────────
+    if (interaction.isChatInputCommand()) {
+      const command = interaction.client.commands.get(interaction.commandName);
+      if (!command) return;
       try {
-        InteractionHelper.patchInteractionResponses(interaction);
+        await command.execute(interaction);
+      } catch (error) {
+        console.error(error);
+      }
+      return;
+    }
 
-        // ── CHAT INPUT COMMAND ─────────────────────────────────
-        if (interaction.isChatInputCommand()) {
-          try {
-            logger.info(`Command executed: /${interaction.commandName} by ${interaction.user.tag}`, {
-              event: 'interaction.command.received',
-              traceId: interactionTraceContext.traceId,
-              guildId: interaction.guildId,
-              userId: interaction.user?.id,
-              command: interaction.commandName
-            });
+    // ── INTERACTION ROUTING: BUTTONS ──────────────────────────
+    if (interaction.isButton()) {
+      // Break the custom ID string apart (e.g., 'shift:join:SH-123456')
+      const [prefix, action, shiftId] = interaction.customId.split(':');
+      
+      // If the button wasn't created by our shift command, ignore it completely
+      if (prefix !== 'shift') return;
 
-            validateChatInputPayloadOrThrow(interaction, withTraceContext({
-              type: 'command_input_validation',
-              commandName: interaction.commandName
-            }, interactionTraceContext));
+      // Defer the button reaction immediately so Discord doesn't show an interaction error
+      await interaction.deferReply({ ephemeral: true });
 
-            const command = client.commands.get(interaction.commandName);
+      try {
+        const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
+        const shifts = Array.isArray(cfg.shifts) ? cfg.shifts : [];
+        const shift = shifts.find(s => s.id === shiftId);
 
-            if (!command) {
-              throw createError(
-                `No command matching ${interaction.commandName} was found.`,
-                ErrorTypes.CONFIGURATION,
-                'Sorry, that command does not exist.',
-                withTraceContext({ commandName: interaction.commandName }, interactionTraceContext)
-              );
-            }
+        if (!shift) {
+          return interaction.editReply({ embeds: [errorEmbed('This shift no longer exists in the system.')] });
+        }
 
-            const abuseProtection = await enforceAbuseProtection(interaction, command, interaction.commandName);
-            if (!abuseProtection.allowed) {
-              const formattedCooldown = formatCooldownDuration(abuseProtection.remainingMs);
-              throw createError(
-                `Risky command cooldown active for ${interaction.commandName}`,
-                ErrorTypes.RATE_LIMIT,
-                `This command is on cooldown. Please wait ${formattedCooldown} before trying again.`,
-                withTraceContext({
-                  commandName: interaction.commandName,
-                  subtype: 'command_cooldown',
-                  expected: true,
-                  cooldownMs: abuseProtection.remainingMs,
-                  cooldownWindowMs: abuseProtection.policy?.windowMs,
-                  cooldownMaxAttempts: abuseProtection.policy?.maxAttempts
-                }, interactionTraceContext)
-              );
-            }
+        const saveShifts = async (newShifts) => {
+          await updateGuildConfig(interaction.client, interaction.guildId, { shifts: newShifts });
+        };
 
-            let guildConfig = null;
-            if (interaction.guild) {
-              guildConfig = await getGuildConfig(client, interaction.guild.id, interactionTraceContext);
-              if (guildConfig?.disabledCommands?.[interaction.commandName]) {
-                throw createError(
-                  `Command ${interaction.commandName} is disabled in this guild`,
-                  ErrorTypes.CONFIGURATION,
-                  'This command has been disabled for this server.',
-                  withTraceContext({ commandName: interaction.commandName, guildId: interaction.guild.id }, interactionTraceContext)
-                );
-              }
-            }
+        const isAdmin = interaction.member.permissions.has(PermissionFlagsBits.ManageGuild);
 
-            if (interaction.guild && guildConfig) {
-              try {
-                const perms = guildConfig.commandPermissions || {};
-                const allowed = perms[interaction.commandName];
-                if (Array.isArray(allowed) && allowed.length > 0) {
-                  const member = interaction.member;
-                  const hasManage = member?.permissions?.has?.(PermissionFlagsBits.ManageGuild) || false;
-                  if (!hasManage) {
-                    const memberRoles = member?.roles?.cache ? Array.from(member.roles.cache.keys()) : [];
-                    const intersection = memberRoles.filter(r => allowed.includes(r));
-                    if (intersection.length === 0) {
-                      throw createError(
-                        `User ${interaction.user.id} not permitted to run ${interaction.commandName}`,
-                        ErrorTypes.PERMISSION,
-                        'You do not have permission to use this command in this server.',
-                        withTraceContext({ commandName: interaction.commandName, guildId: interaction.guild.id }, interactionTraceContext)
-                      );
-                    }
-                  }
-                }
-              } catch (permError) {
-                throw permError;
-              }
-            }
-
-            await command.execute(interaction, guildConfig, client);
-          } catch (error) {
-            await handleInteractionError(interaction, error, withTraceContext({
-              type: 'command',
-              commandName: interaction.commandName
-            }, interactionTraceContext));
+        // ── BUTTON INTERACTION: JOIN ────────────────────────────
+        if (action === 'join') {
+          if (shift.mode !== 'active') {
+            return interaction.editReply({ embeds: [errorEmbed(`This shift is currently **${shift.mode}** and cannot be joined.`)] });
+          }
+          const alreadyIn = shift.participants.some(p => p.userId === interaction.user.id);
+          if (alreadyIn) {
+            return interaction.editReply({ embeds: [warningEmbed('You are already registered in this shift.')] });
+          }
+          if (shift.quota && shift.participants.length >= shift.quota) {
+            return interaction.editReply({ embeds: [errorEmbed('This shift has already hit its staff quota limit.')] });
           }
 
-        // ── AUTOCOMPLETE ───────────────────────────────────────
-        } else if (interaction.isAutocomplete()) {
-          const command = client.commands.get(interaction.commandName);
+          shift.participants.push({ userId: interaction.user.id, joinedAt: new Date().toISOString() });
+          await saveShifts(shifts);
+          
+          return interaction.editReply({ embeds: [successEmbed(`You have successfully joined **${shift.title}**!`)] });
+        }
 
-          if (command?.autocomplete) {
-            try {
-              const guildConfig = interaction.guild
-                ? await getGuildConfig(client, interaction.guild.id, interactionTraceContext)
-                : null;
-              await command.autocomplete(interaction, guildConfig, client);
-            } catch (error) {
-              logger.error(`Autocomplete error for ${interaction.commandName}:`, error);
-              await interaction.respond([]).catch(() => {});
-            }
-            return;
+        // ── BUTTON INTERACTION: LEAVE ───────────────────────────
+        if (action === 'leave') {
+          const before = shift.participants.length;
+          shift.participants = shift.participants.filter(p => p.userId !== interaction.user.id);
+
+          if (shift.participants.length === before) {
+            return interaction.editReply({ embeds: [warningEmbed('You are not clocked into this shift.')] });
           }
 
-          if (interaction.commandName === 'reactroles') {
-            const focusedOption = interaction.options.getFocused(true);
-            if (focusedOption.name === 'panel') {
-              try {
-                const { getAllReactionRoleMessages, deleteReactionRoleMessage } = await import('../services/reactionRoleService.js');
-                const guildId = interaction.guildId;
-                const guild = interaction.guild;
+          await saveShifts(shifts);
+          return interaction.editReply({ embeds: [successEmbed(`You have left **${shift.title}**.`)] });
+        }
 
-                let panels = await getAllReactionRoleMessages(client, guildId);
-
-                if (!panels || panels.length === 0) {
-                  await interaction.respond([]);
-                  return;
-                }
-
-                const validPanels = [];
-                for (const panel of panels) {
-                  if (!panel.messageId || !panel.channelId) continue;
-                  const channel = guild.channels.cache.get(panel.channelId);
-                  if (!channel) {
-                    await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
-                    continue;
-                  }
-                  const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
-                  if (!msg) {
-                    await deleteReactionRoleMessage(client, guildId, panel.messageId).catch(() => {});
-                    continue;
-                  }
-                  validPanels.push(panel);
-                }
-
-                if (validPanels.length === 0) {
-                  await interaction.respond([]);
-                  return;
-                }
-
-                const choices = await Promise.all(
-                  validPanels.slice(0, 25).map(async panel => {
-                    try {
-                      const channel = guild.channels.cache.get(panel.channelId);
-                      if (!channel) return null;
-                      const msg = await channel.messages.fetch(panel.messageId).catch(() => null);
-                      if (!msg) return null;
-                      const title = msg?.embeds?.[0]?.title ?? 'Untitled Panel';
-                      const channelName = channel?.name ?? 'unknown';
-                      return {
-                        name: `${title} (${channelName})`.substring(0, 100),
-                        value: panel.messageId
-                      };
-                    } catch (e) {
-                      return null;
-                    }
-                  })
-                );
-
-                await interaction.respond(choices.filter(c => c !== null));
-              } catch (error) {
-                logger.error('Error handling reactroles autocomplete:', {
-                  error: error.message,
-                  guildId: interaction.guildId,
-                  commandName: interaction.commandName
-                });
-                await interaction.respond([]);
-              }
-            }
+        // ── BUTTON INTERACTION: END ─────────────────────────────
+        if (action === 'end') {
+          if (shift.creatorId !== interaction.user.id && !isAdmin) {
+            return interaction.editReply({ embeds: [errorEmbed('Only the shift host or an admin can end this shift.')] });
+          }
+          if (shift.mode === 'ended') {
+            return interaction.editReply({ embeds: [warningEmbed('This shift has already been closed.')] });
           }
 
-        // ── BUTTON ─────────────────────────────────────────────
-        } else if (interaction.isButton()) {
-          if (interaction.customId.startsWith('shared_todo_')) {
-            const parts = interaction.customId.split('_');
-            const buttonType = parts.slice(0, 3).join('_');
-            const listId = parts[3];
-            const button = client.buttons.get(buttonType);
+          shift.mode = 'ended';
+          shift.endedAt = new Date().toISOString();
+          await saveShifts(shifts);
 
-            if (button) {
-              try {
-                await button.execute(interaction, client, [listId]);
-              } catch (error) {
-                await handleInteractionError(interaction, error, withTraceContext({
-                  type: 'button',
-                  customId: interaction.customId,
-                  handler: 'todo'
-                }, interactionTraceContext));
-              }
-            } else {
-              throw createError(
-                `No button handler found for ${buttonType}`,
-                ErrorTypes.CONFIGURATION,
-                'This button is not available.',
-                withTraceContext({ buttonType }, interactionTraceContext)
-              );
-            }
-            return;
-          }
+          // Clear the physical buttons off the old embed message so people stop clicking them
+          await interaction.message.edit({ components: [] }).catch(() => null);
 
-          const [customId, ...args] = interaction.customId.split(':');
-          const button = client.buttons.get(customId);
-
-          if (!button) {
-            if (!interaction.customId.includes(':')) {
-              return;
-            }
-            throw createError(
-              `No button handler found for ${customId}`,
-              ErrorTypes.CONFIGURATION,
-              'This button is not available.',
-              withTraceContext({ customId }, interactionTraceContext)
-            );
-          }
-
-          try {
-            await button.execute(interaction, client, args);
-          } catch (error) {
-            await handleInteractionError(interaction, error, withTraceContext({
-              type: 'button',
-              customId: interaction.customId,
-              handler: 'general'
-            }, interactionTraceContext));
-          }
-
-        // ── SELECT MENU ────────────────────────────────────────
-        } else if (interaction.isStringSelectMenu()) {
-          const [customId, ...args] = interaction.customId.split(':');
-          const selectMenu = client.selectMenus.get(customId);
-
-          if (!selectMenu) {
-            if (!interaction.customId.includes(':')) {
-              return;
-            }
-            throw createError(
-              `No select menu handler found for ${customId}`,
-              ErrorTypes.CONFIGURATION,
-              'This select menu is not available.',
-              withTraceContext({ customId }, interactionTraceContext)
-            );
-          }
-
-          try {
-            await selectMenu.execute(interaction, client, args);
-          } catch (error) {
-            await handleInteractionError(interaction, error, withTraceContext({
-              type: 'select_menu',
-              customId: interaction.customId
-            }, interactionTraceContext));
-          }
-
-        // ── MODAL ──────────────────────────────────────────────
-        } else if (interaction.isModalSubmit()) {
-          if (interaction.customId.startsWith('jtc_')) {
-            logger.debug(`Skipping modal handler lookup for inline-awaited modal: ${interaction.customId}`, {
-              event: 'interaction.modal.inline_skipped',
-              traceId: interactionTraceContext.traceId
-            });
-            return;
-          }
-
-          // 👇 BUG REPORT MODAL FIX 👇
-          if (interaction.customId === 'bugReportModal') {
-            try {
-              const { bugReportModal } = await import('../interactions/modals/bugReportModal.js');
-              await bugReportModal.execute(interaction);
-            } catch (error) {
-              await handleInteractionError(interaction, error, withTraceContext({
-                type: 'modal',
-                customId: interaction.customId,
-                handler: 'bugReport'
-              }, interactionTraceContext));
-            }
-            return;
-          }
-          // 👆 END BUG REPORT MODAL FIX 👆
-
-          const [customId, ...args] = interaction.customId.split(':');
-          const modal = client.modals.get(customId);
-
-          if (!modal) {
-            if (!interaction.customId.includes(':')) {
-              return; // We safely hit this for custom IDs that aren't mapped properly
-            }
-            throw createError(
-              `No modal handler found for ${customId}`,
-              ErrorTypes.CONFIGURATION,
-              'This form is not available.',
-              withTraceContext({ customId }, interactionTraceContext)
-            );
-          }
-
-          try {
-            await modal.execute(interaction, client, args);
-          } catch (error) {
-            await handleInteractionError(interaction, error, withTraceContext({
-              type: 'modal',
-              customId: interaction.customId,
-              handler: 'general'
-            }, interactionTraceContext));
-          }
+          return interaction.editReply({ embeds: [successEmbed(`Shift **${shift.title}** has been closed.`)] });
         }
 
       } catch (error) {
-        logger.error('Unhandled error in interactionCreate:', {
-          event: 'interaction.unhandled_error',
-          errorCode: 'INTERACTION_UNHANDLED_ERROR',
-          error,
-          traceId: interactionTraceContext.traceId,
-          interactionId: interaction.id,
-          guildId: interaction.guildId,
-          userId: interaction.user?.id
-        });
-
-        try {
-          const ephemeralErrorMessage = {
-            embeds: [MessageTemplates.ERRORS.DATABASE_ERROR('processing your interaction')],
-            flags: MessageFlags.Ephemeral
-          };
-          const editErrorMessage = {
-            embeds: [MessageTemplates.ERRORS.DATABASE_ERROR('processing your interaction')]
-          };
-
-          if (interaction.deferred) {
-            await interaction.editReply(editErrorMessage);
-          } else if (interaction.replied) {
-            await interaction.followUp(ephemeralErrorMessage);
-          } else {
-            await interaction.reply(ephemeralErrorMessage);
-          }
-        } catch (replyError) {
-          logger.error('Failed to send fallback error response:', {
-            event: 'interaction.error_response_failed',
-            errorCode: 'INTERACTION_ERROR_RESPONSE_FAILED',
-            error: replyError,
-            traceId: interactionTraceContext.traceId
-          });
-        }
+        console.error('Persistent button error:', error);
+        return interaction.editReply({ embeds: [errorEmbed('An internal error occurred while handling this click.')] });
       }
-    });
-  }
+    }
+  },
 };
