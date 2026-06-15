@@ -50,7 +50,6 @@ export default {
             const autoVerifyEnabled = Boolean(guildConfig.verification?.autoVerify?.enabled);
             const autoRoleId = guildConfig.autoRole || welcomeConfig?.roleIds?.[0];
 
-            // ── Channels ──────────────────────────────────────────────────────
             const [auditChannel, lifecycleChannel, transcriptChannel, reportChannel, birthdayChannel] =
                 await Promise.all([
                     formatChannelMention(interaction.guild, loggingStatus.channelId || guildConfig.logging?.channelId || guildConfig.logChannelId),
@@ -65,7 +64,6 @@ export default {
                 .setDescription(`Read-only snapshot for **${interaction.guild.name}**. Use the relevant command's dashboard to make changes.`)
                 .setColor(getColor('primary'))
                 .addFields(
-                    // ── Core systems ──
                     {
                         name: '⚙️ Core Systems',
                         value: [
@@ -82,7 +80,6 @@ export default {
                         ].join('\n'),
                         inline: false,
                     },
-                    // ── Channels ──
                     {
                         name: '📡 Configured Channels',
                         value: [
@@ -94,7 +91,6 @@ export default {
                         ].join('\n'),
                         inline: false,
                     },
-                    // ── Refresh stamp ──
                     {
                         name: '🕒 Snapshot Taken',
                         value: `<t:${Math.floor(Date.now() / 1000)}:R>`,

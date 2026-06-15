@@ -13,20 +13,16 @@ export default {
   data: new SlashCommandBuilder()
     .setName('shift')
     .setDescription('🚀 Personal shift clock-in system')
-    
-    // /shift manage
     .addSubcommand(s => s
       .setName('manage')
       .setDescription('📱 Open your personal shift control panel'))
-      
-    // /shift admin <user>
     .addSubcommand(s => s
       .setName('admin')
       .setDescription('👑 Manage another user\'s shift details')
       .addUserOption(o => o.setName('user').setDescription('The staff member to manage').setRequired(true))),
 
   async execute(interaction) {
-    const ok = await InteractionHelper.safeDefer(interaction, { ephemeral: true });
+    const ok = await InteractionHelper.safeDefer(interaction, { flags: ['Ephemeral'] });
     if (!ok) return;
 
     const sub = interaction.options.getSubcommand();
@@ -36,11 +32,9 @@ export default {
       const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
       const userShifts = cfg.userShifts || {};
 
-      // ── 1. PERSONAL INTERFACE ─────────────────────────────────
       if (sub === 'manage') {
         const targetId = interaction.user.id;
         const currentShift = userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
-
         const statusLabel = { Active: '🟢 Clocked In', Paused: '🟡 Paused', Inactive: '🔴 Off Duty' }[currentShift.status] || '🔴 Off Duty';
 
         const embed = createEmbed({
@@ -67,7 +61,7 @@ export default {
             .setCustomId(`shift:manage:pause:${targetId}`)
             .setLabel('Pause')
             .setEmoji('⏸️')
-            .setStyle(ButtonStyle.Warning)
+            .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentShift.status !== 'Active'),
           new ButtonBuilder()
             .setCustomId(`shift:manage:end:${targetId}`)
@@ -80,7 +74,6 @@ export default {
         return InteractionHelper.safeEditReply(interaction, { embeds: [embed], components: [row] });
       }
 
-      // ── 2. ADMINISTRATIVE OVERRIDE INTERFACE ──────────────────
       if (sub === 'admin') {
         if (!isAdmin) {
           return InteractionHelper.safeEditReply(interaction, {
@@ -116,7 +109,7 @@ export default {
             .setCustomId(`shift:admin:pause:${targetUser.id}`)
             .setLabel('Force Pause')
             .setEmoji('⏸️')
-            .setStyle(ButtonStyle.Warning)
+            .setStyle(ButtonStyle.Secondary)
             .setDisabled(currentShift.status !== 'Active'),
           new ButtonBuilder()
             .setCustomId(`shift:admin:end:${targetUser.id}`)

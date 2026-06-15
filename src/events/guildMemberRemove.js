@@ -15,9 +15,7 @@ export default {
   async execute(member) {
     try {
         const { guild, user } = member;
-        
         const welcomeConfig = await getWelcomeConfig(member.client, guild.id);
-        
         const goodbyeChannelId = welcomeConfig?.goodbyeChannelId;
 
         if (welcomeConfig?.goodbyeEnabled && goodbyeChannelId) {
@@ -35,10 +33,7 @@ export default {
                     formatData
                 );
 
-                const embedTitle = formatWelcomeMessage(
-                    welcomeConfig.leaveEmbed?.title || '👋 Goodbye',
-                    formatData
-                );
+                const embedTitle = formatWelcomeMessage(welcomeConfig.leaveEmbed?.title || '👋 Goodbye', formatData);
                 const embedFooter = welcomeConfig.leaveEmbed?.footer
                     ? formatWelcomeMessage(welcomeConfig.leaveEmbed.footer, formatData)
                     : `Goodbye from ${guild.name}!`;
@@ -78,7 +73,6 @@ export default {
             }
         }
         
-        
         try {
             await logEvent({
                 client: member.client,
@@ -88,28 +82,15 @@ export default {
                     description: `${user.tag} left the server`,
                     userId: user.id,
                     fields: [
-                        {
-                            name: '👤 Member',
-                            value: `${user.tag} (${user.id})`,
-                            inline: true
-                        },
-                        {
-                            name: '👥 Member Count',
-                            value: guild.memberCount.toString(),
-                            inline: true
-                        },
-                        {
-                            name: '📅 Joined',
-                            value: `<t:${Math.floor((member.joinedTimestamp || 0) / 1000)}:R>`,
-                            inline: true
-                        }
+                        { name: '👤 Member', value: `${user.tag} (${user.id})`, inline: true },
+                        { name: '👥 Member Count', value: guild.memberCount.toString(), inline: true },
+                        { name: '📅 Joined', value: `<t:${Math.floor((member.joinedTimestamp || 0) / 1000)}:R>`, inline: true }
                     ]
                 }
             });
         } catch (error) {
             logger.debug('Error logging member leave:', error);
         }
-        
         
         try {
             const counters = await getServerCounters(member.client, guild.id);
@@ -122,7 +103,6 @@ export default {
             logger.debug('Error updating counters on member leave:', error);
         }
         
-        // Backup and remove birthday data when a member leaves
         try {
             const birthdays = await getGuildBirthdays(member.client, guild.id);
             if (birthdays[user.id]) {
@@ -137,7 +117,6 @@ export default {
             logger.debug('Error handling birthday on member leave:', error);
         }
         
-        // Remove all pending applications when a member leaves
         try {
             const userApplications = await getUserApplications(member.client, guild.id, user.id);
             if (userApplications && userApplications.length > 0) {
@@ -150,7 +129,6 @@ export default {
             logger.debug('Error handling applications on member leave:', error);
         }
 
-        // Remove leveling data when a member leaves
         try {
             await deleteUserLevelData(member.client, guild.id, user.id);
             logger.debug(`Removed leveling data for user ${user.id} in guild ${guild.id}`);
@@ -163,6 +141,3 @@ export default {
     }
   }
 };
-
-
-

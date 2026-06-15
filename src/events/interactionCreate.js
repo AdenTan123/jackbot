@@ -7,7 +7,6 @@ function formatTimestamp(isoString) {
   return `<t:${Math.floor(new Date(isoString).getTime() / 1000)}:F>`;
 }
 
-// Reusable function to redraw the UI interface instantly
 function renderUpdatedInterface(scope, targetId, shift) {
   const statusLabel = { Active: '🟢 Clocked In', Paused: '🟡 Paused', Inactive: '🔴 Off Duty' }[shift.status] || '🔴 Off Duty';
 
@@ -36,7 +35,7 @@ function renderUpdatedInterface(scope, targetId, shift) {
         .setCustomId(`shift:manage:pause:${targetId}`)
         .setLabel('Pause')
         .setEmoji('⏸️')
-        .setStyle(ButtonStyle.Warning)
+        .setStyle(ButtonStyle.Secondary)
         .setDisabled(shift.status !== 'Active'),
       new ButtonBuilder()
         .setCustomId(`shift:manage:end:${targetId}`)
@@ -47,7 +46,6 @@ function renderUpdatedInterface(scope, targetId, shift) {
     );
     return { embeds: [embed], components: [row] };
   } else {
-    // Admin interface layout
     const embed = createEmbed({
       title: '👑 Admin Shift Override Control',
       color: 'warning',
@@ -72,7 +70,7 @@ function renderUpdatedInterface(scope, targetId, shift) {
         .setCustomId(`shift:admin:pause:${targetId}`)
         .setLabel('Force Pause')
         .setEmoji('⏸️')
-        .setStyle(ButtonStyle.Warning)
+        .setStyle(ButtonStyle.Secondary)
         .setDisabled(shift.status !== 'Active'),
       new ButtonBuilder()
         .setCustomId(`shift:admin:end:${targetId}`)
@@ -106,7 +104,6 @@ function renderUpdatedInterface(scope, targetId, shift) {
 export default {
   name: 'interactionCreate',
   async execute(interaction) {
-
     if (interaction.isChatInputCommand()) {
       const command = interaction.client.commands.get(interaction.commandName);
       if (!command) return;
@@ -114,7 +111,6 @@ export default {
       return;
     }
 
-    // ── 1. MODAL FORM SUBMISSIONS ────────────────────────────
     if (interaction.isModalSubmit()) {
       const [prefix, action, targetId] = interaction.customId.split(':');
       if (prefix !== 'shiftmodal') return;
@@ -125,7 +121,7 @@ export default {
       
       const inputMinutes = parseInt(interaction.fields.getTextInputValue('minutes_input'), 10);
       if (isNaN(inputMinutes) || inputMinutes < 0) {
-        return interaction.reply({ content: '❌ Invalid whole number input.', ephemeral: true });
+        return interaction.reply({ content: '❌ Invalid whole number input.', flags: ['Ephemeral'] });
       }
 
       if (action === 'set') shift.duration = inputMinutes;
@@ -135,12 +131,10 @@ export default {
       cfg.userShifts[targetId] = shift;
       await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
 
-      // Instantly redraw the admin panel view with updated times!
       const render = renderUpdatedInterface('admin', targetId, shift);
       return await interaction.update(render);
     }
 
-    // ── 2. BUTTON INTERACTIONS ────────────────────────────────
     if (interaction.isButton()) {
       const [prefix, scope, action, targetId] = interaction.customId.split(':');
       if (prefix !== 'shift') return;
@@ -156,20 +150,17 @@ export default {
         };
 
         if (scope === 'admin' && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-          return interaction.reply({ content: '⛔ Admin permissions required.', ephemeral: true });
+          return interaction.reply({ content: '⛔ Admin permissions required.', flags: ['Ephemeral'] });
         }
 
-        // ── PROCESS: CLOCK IN / RESUME ──────────────────────────
         if (action === 'start') {
           shift.status = 'Active';
           shift.startedAt = new Date().toISOString();
           await save();
-
           const render = renderUpdatedInterface(scope, targetId, shift);
           return await interaction.update(render);
         }
 
-        // ── PROCESS: PAUSE SHIFT ────────────────────────────────
         if (action === 'pause') {
           if (shift.status === 'Active' && shift.startedAt) {
             const elapsedMs = new Date() - new Date(shift.startedAt);
@@ -178,12 +169,10 @@ export default {
           shift.status = 'Paused';
           shift.startedAt = null;
           await save();
-
           const render = renderUpdatedInterface(scope, targetId, shift);
           return await interaction.update(render);
         }
 
-        // ── PROCESS: CLOCK OUT ──────────────────────────────────
         if (action === 'end') {
           if (shift.status === 'Active' && shift.startedAt) {
             const elapsedMs = new Date() - new Date(shift.startedAt);
@@ -192,12 +181,10 @@ export default {
           shift.status = 'Inactive';
           shift.startedAt = null;
           await save();
-
           const render = renderUpdatedInterface(scope, targetId, shift);
           return await interaction.update(render);
         }
 
-        // ── PROCESS: SHOW TIME ADJUSTMENT MODALS ────────────────
         if (['set', 'add', 'dec'].includes(action)) {
           const modalTitles = { set: '⚙️ Set Total Time', add: '➕ Add Time Record', dec: '➖ Decrease Time Record' };
           const modalFields = { set: 'Enter exact minutes total:', add: 'Minutes to add:', dec: 'Minutes to subtract:' };
@@ -216,7 +203,6 @@ export default {
           modal.addComponents(new ActionRowBuilder().addComponents(minutesInput));
           return await interaction.showModal(modal);
         }
-
       } catch (error) {
         console.error('System update framework failed:', error);
       }
