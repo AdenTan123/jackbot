@@ -10,6 +10,7 @@ async function getTicketConfig(client, guildId) {
   return {
     categoryId: cfg?.ticketCategoryId ?? null,
     logChannelId: cfg?.ticketLogChannelId ?? null,
+    strikeMessageTemplate: cfg?.strikeMessageTemplate ?? null
   };
 }
 
@@ -103,6 +104,12 @@ export default {
       .addUserOption(o => o.setName('creator').setDescription('Person assigned to the ticket').setRequired(false))
       .addStringOption(o => o.setName('reason').setDescription('Reason for the ticket').setRequired(false)))
     .addSubcommand(sub => sub
+      .setName('strike')
+      .setDescription('Create an official documentation ticket for tracking a user strike infraction')
+      .addUserOption(o => o.setName('user').setDescription('The user receiving this dynamic strike recording').setRequired(true))
+      .addStringOption(o => o.setName('reason').setDescription('Infraction detailing causing the strike penalty').setRequired(true))
+      .addUserOption(o => o.setName('creator').setDescription('Staff executor issuing this strike action').setRequired(false)))
+    .addSubcommand(sub => sub
       .setName('bring')
       .setDescription('Add a user to this ticket')
       .addUserOption(o => o.setName('user').setDescription('User to add').setRequired(true)))
@@ -149,19 +156,105 @@ export default {
               { name: '📁 Category', value: category.name, inline: true },
               { name: '📋 Log Channel', value: `<#${logChannel.id}>`, inline: true },
             ],
-            footer: { text: 'You can now use /ticket create' },
+            footer: { text: 'You can now use /ticket create or /ticket strike' },
             timestamp: true,
           })],
         });
       }
 
-      // Load per-guild config for all other subcommands
-      const { categoryId, logChannelId } = await getTicketConfig(client, interaction.guildId);
+      // Load per-guild config values
+      const { categoryId, logChannelId, strikeMessageTemplate } = await getTicketConfig(client, interaction.guildId);
+
+      // ═══════════════════════════════════════════════════════════
+      // STRIKE COMMAND
+      // ═══════════════════════════════════════════════════════════
+      if (sub === 'strike') {
+        if (!categoryId) {
+          throw new Error('Tickets are not set up yet. Run `/ticket setup` first.');
+        }
+
+        const user = interaction.options.getUser('user', true);
+        const reason = interaction.options.getString('reason', true);
+        const creator = interaction.options.getUser('creator') || interaction.user;
+
+        const category = interaction.guild.channels.cache.get(categoryId);
+        if (!category) {
+          throw new Error('Ticket category not found. Please run `/ticket setup` again.');
+        }
+
+        // Distinct styling specifically tracking structural records
+        const ticketName = `strike-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`;
+
+        const overwrites = [
+          { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
+          { id: creator.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+          { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
+          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
+        ];
+
+        const ticketChannel = await interaction.guild.channels.create({
+          name: ticketName,
+          type: ChannelType.GuildText,
+          parent: categoryId,
+          permissionOverwrites: overwrites,
+        });
+
+        const panelEmbed = createEmbed({
+          title: '⚡ Infraction Strike Logged',
+          description: `An official tracking ticket channel has been initialized regarding user behavior records.`,
+          color: 'error',
+          fields: [
+            { name: '👤 Targeted User', value: `<@${user.id}>`, inline: true },
+            { name: '🛡️ Issuing Officer', value: `<@${creator.id}>`, inline: true },
+          ],
+          timestamp: true,
+        });
+
+        const row = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`ticket_close:${creator.id}`)
+            .setLabel('🔒 Close Ticket')
+            .setStyle(ButtonStyle.Danger)
+        );
+
+        // Core compilation handling layout variable injection cleanly
+        const baseTemplate = strikeMessageTemplate || "⚠️ **STRIKE ISSUED**\n\n👤 **User:** {user}\n🛡️ **Staff:** {creator}\n📝 **Reason:** {reason}";
+        const processedMessage = baseTemplate
+          .replace(/{user}/g, `<@${user.id}>`)
+          .replace(/{creator}/g, `<@${creator.id}>`)
+          .replace(/{reason}/g, reason);
+
+        // Dispatches the notification dashboard cleanly
+        await ticketChannel.send({
+          content: `<@${user.id}>`,
+          embeds: [panelEmbed],
+          components: [row]
+        });
+
+        // Appends the completely updated custom message configuration
+        await ticketChannel.send({ content: processedMessage });
+
+        await logToChannel(interaction.guild, logChannelId, createEmbed({
+          title: '⚡ Strike Ticket Log Entry',
+          color: 'error',
+          fields: [
+            { name: '📌 Channel Link', value: `<#${ticketChannel.id}>`, inline: true },
+            { name: '👤 Target', value: `<@${user.id}>`, inline: true },
+            { name: '🛡️ Officer', value: `<@${creator.id}>`, inline: true },
+            { name: '📝 Reason Given', value: reason, inline: false },
+          ],
+          timestamp: true,
+        }));
+
+        await InteractionHelper.safeEditReply(interaction, {
+          embeds: [successEmbed(`Strike tracking active inside: <#${ticketChannel.id}>`, '⚡ Strike Ticket Created')],
+        });
+      }
 
       // ═══════════════════════════════════════════════════════════
       // CREATE
       // ═══════════════════════════════════════════════════════════
-      if (sub === 'create') {
+      else if (sub === 'create') {
         if (!categoryId) {
           throw new Error('Tickets are not set up yet. Run `/ticket setup` first.');
         }
@@ -181,12 +274,10 @@ export default {
           throw new Error('Ticket category not found. Please run `/ticket setup` again.');
         }
 
-        // Build channel name
         const ticketName = user
           ? `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`
           : `ticket-${role.name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`;
 
-        // Build permission overwrites
         const overwrites = [
           {
             id: interaction.guild.roles.everyone.id,
@@ -202,7 +293,6 @@ export default {
           },
         ];
 
-        // If user provided, give them access individually
         if (user) {
           overwrites.push({
             id: user.id,
@@ -210,7 +300,6 @@ export default {
           });
         }
 
-        // If role provided, give the ROLE access (so all role members can see)
         if (role) {
           overwrites.push({
             id: role.id,
@@ -218,7 +307,6 @@ export default {
           });
         }
 
-        // Create the channel
         const ticketChannel = await interaction.guild.channels.create({
           name: ticketName,
           type: ChannelType.GuildText,
@@ -226,10 +314,8 @@ export default {
           permissionOverwrites: overwrites,
         });
 
-        // Build target mention string
         const target = user ? `<@${user.id}>` : `<@&${role.id}>`;
 
-        // Build embed description
         const embedDescription = user
           ? `This is a personal ticket for <@${user.id}> with <@${creator.id}>`
           : `This is a role ticket for <@&${role.id}> created by <@${creator.id}>`;
@@ -260,7 +346,6 @@ export default {
           components: [row],
         });
 
-        // Log to log channel
         await logToChannel(interaction.guild, logChannelId, createEmbed({
           title: '🎫 Ticket Created',
           color: 'info',
@@ -334,7 +419,6 @@ export default {
 
         const user = interaction.options.getUser('user');
 
-        // Revoke all permissions for this user
         await interaction.channel.permissionOverwrites.create(user.id, {
           ViewChannel: false,
           SendMessages: false,
@@ -344,12 +428,9 @@ export default {
           EmbedLinks: false,
         });
 
-        // Optional: also kick them from the channel's permission list entirely
         try {
           await interaction.channel.permissionOverwrites.delete(user.id);
-        } catch {
-          // If permission overwrite doesn't exist, that's fine
-        }
+        } catch {}
 
         await interaction.channel.send({
           embeds: [createEmbed({

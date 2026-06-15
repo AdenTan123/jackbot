@@ -1,14 +1,18 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
+import { 
+  SlashCommandBuilder, 
+  PermissionFlagsBits, 
+  ChannelType, 
+  ModalBuilder, 
+  TextInputBuilder, 
+  TextInputStyle, 
+  ActionRowBuilder 
+} from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
 import { logger } from '../../utils/logger.js';
 
 export default {
-  // Existing subcommands...
-  // Added counting configuration subcommand
-  // NOTE: This mirrors src/commands/Integration/counting.js for admin use
-
   data: new SlashCommandBuilder()
     .setName('config')
     .setDescription('Configure bot settings for this server')
@@ -53,6 +57,7 @@ export default {
           { name: 'Mod Log Channel', value: 'modLogChannelId' },
           { name: 'Ticket Category', value: 'ticketCategoryId' },
           { name: 'Ticket Log Channel', value: 'ticketLogChannelId' },
+          { name: 'Strike Message Template', value: 'strikeMessageTemplate' },
         )))
 
     .addSubcommand(sub => sub
@@ -72,15 +77,51 @@ export default {
           .setDescription('Allow simple math expressions like "4+1" (Y/N)')
           .setRequired(true)
           .addChoices({ name: 'Yes', value: 'Y' }, { name: 'No', value: 'N' }))
-    ), // Removed the invalid setDefaultMemberPermissions here
+    )
+    .addSubcommand(sub => sub
+      .setName('strikemessage')
+      .setDescription('Set the custom message layout posted inside strike tickets')),
 
   category: 'admin',
 
   async execute(interaction, config, client) {
+    const sub = interaction.options.getSubcommand();
+
+    // ── STRIKE MESSAGE MODAL TRIGGER ───────────────────────
+    // Must run BEFORE deferring the interaction, otherwise the modal will crash!
+    if (sub === 'strikemessage') {
+      try {
+        const cfg = await getGuildConfig(client, interaction.guildId).catch(() => ({})) ?? {};
+        const defaultTemplate = "⚠️ **STRIKE ISSUED**\n\n👤 **User:** {user}\n🛡️ **Staff:** {creator}\n📝 **Reason:** {reason}";
+        const currentTemplate = cfg.strikeMessageTemplate || defaultTemplate;
+
+        const modal = new ModalBuilder()
+          .setCustomId('strikeMessageModal')
+          .setTitle('Configure Strike Message');
+
+        const templateInput = new TextInputBuilder()
+          .setCustomId('templateInput')
+          .setLabel('Message Layout Template')
+          .setStyle(TextInputStyle.Paragraph)
+          .setPlaceholder('Use placeholders: {user}, {creator}, {reason}')
+          .setValue(currentTemplate)
+          .setRequired(true)
+          .setMaxLength(1500);
+
+        const row = new ActionRowBuilder().addComponents(templateInput);
+        modal.addComponents(row);
+
+        await interaction.showModal(modal);
+        return;
+      } catch (error) {
+        logger.error('Error triggering strike message modal:', error);
+        return;
+      }
+    }
+
+    // Defer for all standard subcommands that don't open popups
     const deferSuccess = await InteractionHelper.safeDefer(interaction);
     if (!deferSuccess) return;
-
-    const sub = interaction.options.getSubcommand();
 
     try {
       const cfg = await getGuildConfig(client, interaction.guildId).catch(() => ({})) ?? {};
@@ -93,6 +134,7 @@ export default {
           : '❌ Not set';
         const ticketLog = cfg.ticketLogChannelId ? `<#${cfg.ticketLogChannelId}>` : '❌ Not set';
         const loggingEnabled = cfg.logging?.enabled !== false ? '✅ Enabled' : '❌ Disabled';
+        const strikeMsgSet = cfg.strikeMessageTemplate ? '✅ Configured Custom' : 'ℹ️ Using Default';
 
         return InteractionHelper.safeEditReply(interaction, {
           embeds: [createEmbed({
@@ -101,7 +143,7 @@ export default {
             fields: [
               { name: '📋 Mod Log Channel', value: modLog, inline: true },
               { name: '📝 Logging', value: loggingEnabled, inline: true },
-              { name: '\u200b', value: '\u200b', inline: true },
+              { name: '⚡ Strike Layout', value: strikeMsgSet, inline: true },
               { name: '🎫 Ticket Category', value: ticketCat, inline: true },
               { name: '📋 Ticket Log Channel', value: ticketLog, inline: true },
               { name: '\u200b', value: '\u200b', inline: true },
@@ -117,8 +159,8 @@ export default {
         const channel = interaction.options.getChannel('channel');
         await updateGuildConfig(client, interaction.guildId, {
           modLogChannelId: channel.id,
-          logChannelId: channel.id,        // also set legacy key
-          'logging.channelId': channel.id, // also set nested key
+          logChannelId: channel.id,        
+          'logging.channelId': channel.id, 
           logging: { ...(cfg.logging ?? {}), channelId: channel.id, enabled: true },
         });
         return InteractionHelper.safeEditReply(interaction, {
@@ -158,28 +200,20 @@ export default {
 
       // ── COUNTING ───────────────────────────────────────────
       if (sub === 'counting') {
-        // If you need strict Administrator access for just this subcommand, uncomment the lines below:
-        // if (!interaction.member.permissions.has(PermissionFlagsBits.Administrator)) {
-        //   throw new Error('You must have Administrator permissions to set up the counting channel.');
-        // }
-
         const channelId = interaction.options.getString('channelid', true).trim();
         const deleteNonWords = interaction.options.getString('deletenonwords', true) === 'Y';
         const allowMath = interaction.options.getString('math', true) === 'Y';
 
-        // Load existing guild config (or create a fresh object)
         const guildConfig = await getGuildConfig(client, interaction.guildId).catch(() => ({}));
         const updated = { ...guildConfig };
         updated.counting = {
           channelId,
           deleteNonWords,
           allowMath,
-          // runtime state – persisted between restarts
           lastNumber: 0,
           lastUserId: null,
         };
 
-        // Fixed method name here:
         await updateGuildConfig(client, interaction.guildId, updated);
         logger.info('Counting config saved', { guildId: interaction.guildId, channelId, deleteNonWords, allowMath });
 
