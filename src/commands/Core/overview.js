@@ -1,28 +1,28 @@
-import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
-import { getColor } from '../../config/bot.js';
+import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { getGuildConfig } from '../../services/guildConfig.js';
 import { getLoggingStatus } from '../../services/loggingService.js';
 import { getLevelingConfig } from '../../services/leveling.js';
 import { getConfiguration as getJoinToCreateConfiguration } from '../../services/joinToCreateService.js';
 import { getWelcomeConfig, getApplicationSettings } from '../../utils/database.js';
-import { errorEmbed } from '../../utils/embeds.js';
+import { createEmbed, errorEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
+import { EMOJIS } from '../../config/emojis.js';
 import { logger } from '../../utils/logger.js';
 
 function pill(enabled) {
-    return enabled ? '✅ On' : '❌ Off';
+    return enabled ? `${EMOJIS.check} On` : `${EMOJIS.cross} Off`;
 }
 
 async function formatChannelMention(guild, id) {
     if (!id) return '`Not configured`';
     const channel = guild.channels.cache.get(id) ?? await guild.channels.fetch(id).catch(() => null);
-    return channel ? channel.toString() : `⚠️ Missing (${id})`;
+    return channel ? channel.toString() : `${EMOJIS.warning} Missing (${id})`;
 }
 
 function formatRoleMention(guild, id) {
     if (!id) return '`Not configured`';
     const role = guild.roles.cache.get(id);
-    return role ? role.toString() : `⚠️ Missing (${id})`;
+    return role ? role.toString() : `${EMOJIS.warning} Missing (${id})`;
 }
 
 export default {
@@ -59,11 +59,11 @@ export default {
                     formatChannelMention(interaction.guild, guildConfig.birthdayChannelId),
                 ]);
 
-            const embed = new EmbedBuilder()
-                .setTitle('🖥️ System Overview')
-                .setDescription(`Read-only snapshot for **${interaction.guild.name}**. Use the relevant command's dashboard to make changes.`)
-                .setColor(getColor('primary'))
-                .addFields(
+            const embed = createEmbed({
+                title: 'System Overview', // Auto-prefixes with brand emoji dynamically via embeds.js
+                color: 'primary',
+                description: `Read-only snapshot for **${interaction.guild.name}**. Use the relevant command's dashboard to make changes.`,
+                fields: [
                     {
                         name: '⚙️ Core Systems',
                         value: [
@@ -76,7 +76,7 @@ export default {
                             `✅ **Verification** — ${pill(verificationEnabled)}`,
                             `🤖 **Auto-Verify** — ${pill(autoVerifyEnabled)}`,
                             `🎧 **Join to Create** — ${pill(Boolean(joinToCreateConfig?.enabled))}`,
-                            `🛡️ **Auto Role** — ${autoRoleId ? `✅ ${formatRoleMention(interaction.guild, autoRoleId)}` : '❌ Off'}`,
+                            `🛡️ **Auto Role** — ${autoRoleId ? `${EMOJIS.check} ${formatRoleMention(interaction.guild, autoRoleId)}` : `${EMOJIS.cross} Off`}`,
                         ].join('\n'),
                         inline: false,
                     },
@@ -96,9 +96,9 @@ export default {
                         value: `<t:${Math.floor(Date.now() / 1000)}:R>`,
                         inline: true,
                     },
-                )
-                .setFooter({ text: 'Read-only — run /logging dashboard to manage audit settings' })
-                .setTimestamp();
+                ],
+                footer: 'Read-only — run /logging dashboard to manage audit settings'
+            });
 
             await InteractionHelper.safeEditReply(interaction, { embeds: [embed] });
         } catch (error) {

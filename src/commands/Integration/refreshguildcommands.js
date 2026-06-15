@@ -2,6 +2,7 @@ import { SlashCommandBuilder, PermissionFlagsBits, REST, Routes } from 'discord.
 import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { EMOJIS } from '../../config/emojis.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -9,7 +10,7 @@ const __dirname = path.dirname(__filename);
 export default {
   data: new SlashCommandBuilder()
     .setName('refreshguildcommands')
-    .setDescription('🔄 Recalculate and synchronize application commands across this server guild.')
+    .setDescription('Recalculate and synchronize application commands across this server guild.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .setDMPermission(false),
 
@@ -18,7 +19,6 @@ export default {
     
     try {
       const commands = [];
-      // Adjust path to find the base 'commands' directory from inside commands/Integration/
       const foldersPath = path.join(__dirname, '..', '..', 'commands');
       const commandFolders = fs.readdirSync(foldersPath);
 
@@ -44,10 +44,10 @@ export default {
         { body: commands }
       );
 
-      await interaction.editReply({ content: `✅ Complete! Re-synchronized \`${commands.length}\` slash definitions into this guild context.` });
+      await interaction.editReply({ content: `${EMOJIS.check} Complete! Re-synchronized \`${commands.length}\` slash definitions into this guild context.` });
     } catch (error) {
       console.error(error);
-      await interaction.editReply({ content: '❌ Failed to dynamically compile local modules structure.' });
+      await interaction.editReply({ content: `${EMOJIS.danger} Failed to dynamically compile local modules structure.` });
     }
   }
 };

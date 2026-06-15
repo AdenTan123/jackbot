@@ -1,9 +1,10 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { EMOJIS } from '../../config/emojis.js';
 
 export default {
   data: new SlashCommandBuilder()
     .setName('purgeduplicates')
-    .setDescription('🗑️ Wipe redundant command schemas from the server dashboard register.')
+    .setDescription('Wipe redundant command schemas from the server dashboard register.')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
     .setDMPermission(false),
 
@@ -24,10 +25,10 @@ export default {
         }
       }
 
-      await interaction.editReply({ content: `✨ State normalized! Cleaned up \`${purgedCount}\` duplicate guild application endpoints.` });
+      await interaction.editReply({ content: `${EMOJIS.check} State normalized! Cleaned up \`${purgedCount}\` duplicate guild application endpoints.` });
     } catch (error) {
       console.error(error);
-      await interaction.editReply({ content: '❌ High-level permissions constraint block; failed to filter active command array.' });
+      await interaction.editReply({ content: `${EMOJIS.danger} High-level permissions constraint block; failed to filter active command array.` });
     }
   }
 };

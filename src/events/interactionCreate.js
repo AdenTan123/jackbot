@@ -1,6 +1,7 @@
 import { PermissionFlagsBits, ModalBuilder, TextInputBuilder, TextInputStyle, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { getGuildConfig, updateGuildConfig } from '../services/guildConfig.js';
 import { createEmbed, errorEmbed } from '../utils/embeds.js';
+import { EMOJIS, EMOJI_IDS } from '../config/emojis.js';
 
 function formatTimestamp(isoString) {
   if (!isoString) return '💤 Not currently clocked in';
@@ -8,11 +9,15 @@ function formatTimestamp(isoString) {
 }
 
 function renderUpdatedInterface(scope, targetId, shift) {
-  const statusLabel = { Active: '🟢 Clocked In', Paused: '🟡 Paused', Inactive: '🔴 Off Duty' }[shift.status] || '🔴 Off Duty';
+  const statusLabel = { 
+    Active: `${EMOJIS.check} Clocked In`, 
+    Paused: `${EMOJIS.warning} Paused`, 
+    Inactive: `${EMOJIS.cross} Off Duty` 
+  }[shift.status] || `${EMOJIS.cross} Off Duty`;
 
   if (scope === 'manage') {
     const embed = createEmbed({
-      title: '⚡ Your Personal Shift Station',
+      title: 'Your Personal Shift Station',
       color: shift.status === 'Active' ? 'success' : shift.status === 'Paused' ? 'warning' : 'info',
       description: `Click the control buttons below to instantly update your status metrics.`,
       fields: [
@@ -28,26 +33,26 @@ function renderUpdatedInterface(scope, targetId, shift) {
       new ButtonBuilder()
         .setCustomId(`shift:manage:start:${targetId}`)
         .setLabel(shift.status === 'Paused' ? 'Resume Shift' : 'Clock In')
-        .setEmoji(shift.status === 'Paused' ? '▶️' : '✨')
+        .setEmoji(EMOJI_IDS.check)
         .setStyle(ButtonStyle.Success)
         .setDisabled(shift.status === 'Active'),
       new ButtonBuilder()
         .setCustomId(`shift:manage:pause:${targetId}`)
         .setLabel('Pause')
-        .setEmoji('⏸️')
+        .setEmoji(EMOJI_IDS.warning)
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(shift.status !== 'Active'),
       new ButtonBuilder()
         .setCustomId(`shift:manage:end:${targetId}`)
         .setLabel('Clock Out')
-        .setEmoji('🛑')
+        .setEmoji(EMOJI_IDS.cross)
         .setStyle(ButtonStyle.Danger)
         .setDisabled(shift.status === 'Inactive')
     );
     return { embeds: [embed], components: [row] };
   } else {
     const embed = createEmbed({
-      title: '👑 Admin Shift Override Control',
+      title: 'Admin Shift Override Control',
       color: 'warning',
       description: `Remote system tools to modify records for <@${targetId}>.`,
       fields: [
@@ -63,19 +68,19 @@ function renderUpdatedInterface(scope, targetId, shift) {
       new ButtonBuilder()
         .setCustomId(`shift:admin:start:${targetId}`)
         .setLabel(shift.status === 'Paused' ? 'Force Resume' : 'Force Clock In')
-        .setEmoji('⚡')
+        .setEmoji(EMOJI_IDS.check)
         .setStyle(ButtonStyle.Success)
         .setDisabled(shift.status === 'Active'),
       new ButtonBuilder()
         .setCustomId(`shift:admin:pause:${targetId}`)
         .setLabel('Force Pause')
-        .setEmoji('⏸️')
+        .setEmoji(EMOJI_IDS.warning)
         .setStyle(ButtonStyle.Secondary)
         .setDisabled(shift.status !== 'Active'),
       new ButtonBuilder()
         .setCustomId(`shift:admin:end:${targetId}`)
         .setLabel('Force Clock Out')
-        .setEmoji('🛑')
+        .setEmoji(EMOJI_IDS.cross)
         .setStyle(ButtonStyle.Danger)
         .setDisabled(shift.status === 'Inactive')
     );
@@ -84,17 +89,17 @@ function renderUpdatedInterface(scope, targetId, shift) {
       new ButtonBuilder()
         .setCustomId(`shift:admin:set:${targetId}`)
         .setLabel('Set Duration')
-        .setEmoji('⚙️')
+        .setEmoji(EMOJI_IDS.brand)
         .setStyle(ButtonStyle.Primary),
       new ButtonBuilder()
         .setCustomId(`shift:admin:add:${targetId}`)
         .setLabel('Add Minutes')
-        .setEmoji('➕')
+        .setEmoji(EMOJI_IDS.information)
         .setStyle(ButtonStyle.Secondary),
       new ButtonBuilder()
         .setCustomId(`shift:admin:dec:${targetId}`)
         .setLabel('Remove Minutes')
-        .setEmoji('➖')
+        .setEmoji(EMOJI_IDS.danger)
         .setStyle(ButtonStyle.Secondary)
     );
     return { embeds: [embed], components: [row1, row2] };
@@ -121,7 +126,7 @@ export default {
       
       const inputMinutes = parseInt(interaction.fields.getTextInputValue('minutes_input'), 10);
       if (isNaN(inputMinutes) || inputMinutes < 0) {
-        return interaction.reply({ content: '❌ Invalid whole number input.', flags: ['Ephemeral'] });
+        return interaction.reply({ content: `${EMOJIS.cross} Invalid whole number input.`, flags: ['Ephemeral'] });
       }
 
       if (action === 'set') shift.duration = inputMinutes;
@@ -150,7 +155,7 @@ export default {
         };
 
         if (scope === 'admin' && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-          return interaction.reply({ content: '⛔ Admin permissions required.', flags: ['Ephemeral'] });
+          return interaction.reply({ content: `${EMOJIS.danger} Admin permissions required.`, flags: ['Ephemeral'] });
         }
 
         if (action === 'start') {
@@ -186,7 +191,7 @@ export default {
         }
 
         if (['set', 'add', 'dec'].includes(action)) {
-          const modalTitles = { set: '⚙️ Set Total Time', add: '➕ Add Time Record', dec: '➖ Decrease Time Record' };
+          const modalTitles = { set: 'Set Total Time', add: 'Add Time Record', dec: 'Decrease Time Record' };
           const modalFields = { set: 'Enter exact minutes total:', add: 'Minutes to add:', dec: 'Minutes to subtract:' };
 
           const modal = new ModalBuilder()

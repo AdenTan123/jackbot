@@ -1,4 +1,4 @@
-import { Events, EmbedBuilder, PermissionFlagsBits } from 'discord.js';
+import { Events, PermissionFlagsBits } from 'discord.js';
 import { getColor } from '../config/bot.js';
 import { getWelcomeConfig, getUserApplications, deleteApplication } from '../utils/database.js';
 import { formatWelcomeMessage } from '../utils/welcome.js';
@@ -6,6 +6,8 @@ import { logEvent, EVENT_TYPES } from '../services/loggingService.js';
 import { getServerCounters, updateCounter } from '../services/serverstatsService.js';
 import { getGuildBirthdays, deleteBirthday } from '../utils/database.js';
 import { deleteUserLevelData } from '../services/leveling.js';
+import { createEmbed } from '../utils/embeds.js';
+import { EMOJIS } from '../config/emojis.js';
 import { logger } from '../utils/logger.js';
 
 export default {
@@ -33,7 +35,7 @@ export default {
                     formatData
                 );
 
-                const embedTitle = formatWelcomeMessage(welcomeConfig.leaveEmbed?.title || '👋 Goodbye', formatData);
+                const embedTitle = formatWelcomeMessage(welcomeConfig.leaveEmbed?.title || 'Goodbye', formatData);
                 const embedFooter = welcomeConfig.leaveEmbed?.footer
                     ? formatWelcomeMessage(welcomeConfig.leaveEmbed.footer, formatData)
                     : `Goodbye from ${guild.name}!`;
@@ -46,17 +48,17 @@ export default {
                         allowedMentions: welcomeConfig?.goodbyePing ? { users: [user.id] } : { parse: [] }
                     });
                 } else {
-                    const embed = new EmbedBuilder()
-                        .setTitle(embedTitle)
-                        .setDescription(goodbyeMessage)
-                        .setColor(welcomeConfig.leaveEmbed?.color || getColor('error'))
-                        .setThumbnail(user.displayAvatarURL())
-                        .addFields(
+                    const embed = createEmbed({
+                        title: embedTitle,
+                        description: goodbyeMessage,
+                        color: 'error',
+                        thumbnail: user.displayAvatarURL(),
+                        fields: [
                             { name: 'User', value: `${user.tag} (${user.id})`, inline: true },
                             { name: 'Member Count', value: guild.memberCount.toString(), inline: true }
-                        )
-                        .setTimestamp()
-                        .setFooter({ text: embedFooter });
+                        ],
+                        footer: embedFooter
+                    });
 
                     if (typeof welcomeConfig.leaveEmbed?.image === 'string') {
                         embed.setImage(welcomeConfig.leaveEmbed.image);
