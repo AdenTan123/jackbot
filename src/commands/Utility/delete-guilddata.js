@@ -10,9 +10,9 @@ export default {
     async execute(interaction) {
         // Administrative safeguard check
         if (!interaction.member.permissions.has('Administrator')) {
-            return interaction.editReply({
+            return interaction.reply({
                 content: '❌ You do not have permission to use this command. (Requires Administrator)',
-                components: []
+                ephemeral: true
             });
         }
 
@@ -39,10 +39,11 @@ export default {
 
         const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
 
-        // We use editReply here because your framework already handled the deferral!
-        await interaction.editReply({
+        // CHANGED: Swapped editReply out for a standard initial reply
+        await interaction.reply({
             embeds: [warningEmbed],
-            components: [row]
+            components: [row],
+            ephemeral: true // Keeps the interaction private and secure
         });
     }
 };
