@@ -17,8 +17,8 @@ export default {
             await interaction.deferUpdate();
 
             // --------------------------------------------------------
-            // 📝 PLACE YOUR DATABASE DELETION QUERIES HERE
-            // Example: await db.query('DELETE FROM guilds WHERE id = $1', [interaction.guildId]);
+            // 🛠️ DATABASE DELETION - INSERT YOUR PURGE LOGIC HERE
+            // Example: await db.purgeGuildData(interaction.guildId);
             // --------------------------------------------------------
 
             await interaction.editReply({
