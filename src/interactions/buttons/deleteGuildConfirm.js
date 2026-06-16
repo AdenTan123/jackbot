@@ -17,8 +17,23 @@ export default {
             await interaction.deferUpdate();
 
             // --------------------------------------------------------
-            // 🛠️ DATABASE DELETION - INSERT YOUR PURGE LOGIC HERE
-            // Example: await db.purgeGuildData(interaction.guildId);
+            // 🛠️ DATABASE DELETION - PERFORM GUILD DATA PURGE
+            try {
+                const start = Date.now();
+                // Replace with your actual DB deletion function
+                // Example for a Prisma client:
+                await prisma.guild.delete({
+                    where: { id: interaction.guildId }
+                });
+                // If you use a different DB driver, swap the line above for your call,
+                // e.g. `await db.deleteGuildData(interaction.guildId);`
+                const duration = Date.now() - start;
+                console.log(`🔧 Guild data purge completed in ${duration}ms`);
+            } catch (purgeError) {
+                console.error('❗ Guild purge failed:', purgeError);
+                // Pass the error to the outer catch block so the user gets an error reply
+                throw purgeError;
+            }
             // --------------------------------------------------------
 
             await interaction.editReply({
