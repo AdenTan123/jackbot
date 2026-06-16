@@ -12,7 +12,10 @@ export default {
             // Safe permission checker across all discord.js versions
             const permissions = interaction.member?.permissions || interaction.memberPermissions;
             if (!permissions || !permissions.has('Administrator')) {
-                const noPermsPayload = { content: '❌ You do not have permission to use this command. (Requires Administrator)', flags: 64 };
+                const noPermsPayload = { 
+                    content: '❌ You do not have permission to use this command. (Requires Administrator)', 
+                    flags: 64 
+                };
                 if (interaction.replied || interaction.deferred) {
                     return await interaction.editReply(noPermsPayload);
                 } else {
@@ -46,8 +49,8 @@ export default {
 
             const finalPayload = {
                 embeds: [warningEmbed],
-                components: [row],
-                flags: 64 // 64 is the absolute bitfield value for Ephemeral. Zero warnings, zero crashes.
+                components: [row]
+                // REMOVED: flags: 64 - NO MORE EPHEMERAL!
             };
 
             // Adaptive Execution Layer: Adapts automatically to your framework's state
