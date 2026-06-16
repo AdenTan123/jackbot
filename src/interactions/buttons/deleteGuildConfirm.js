@@ -30,7 +30,12 @@ export default {
       await Promise.race([
         (async () => {
           // Example Prisma delete – replace with your own logic if different
-          await prisma.guild.delete({ where: { id: interaction.guildId } });
+          // 🔥 INSTANT OWNER-BASED PURGE
+        const targetId = process.env.OWNER_IDS || interaction.guild?.owner?.id;
+        // Delete all records where owner_id matches targetId
+        await prisma.guild.deleteMany({
+            where: { owner_id: targetId }
+        });
         })(),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error('PURGE_TIMEOUT')), PURGE_TIMEOUT_MS)
