@@ -5,21 +5,12 @@ export default {
 
     async execute(interaction) {
         try {
-            // Fix 1: Check if interaction is already replied/deferred
+            // Check if interaction is already handled
             if (interaction.replied || interaction.deferred) {
                 return;
             }
 
-            // Fix 2: Better permission checking
-            const member = interaction.member;
-            if (!member) {
-                return interaction.reply({
-                    content: '❌ Unable to verify your permissions. Please try again.',
-                    flags: 64
-                });
-            }
-
-            const permissions = member.permissions;
+            const permissions = interaction.member?.permissions || interaction.memberPermissions;
             if (!permissions || !permissions.has('Administrator')) {
                 return interaction.reply({
                     content: '❌ Only administrators can confirm database purges.',
@@ -27,42 +18,44 @@ export default {
                 });
             }
 
-            // Fix 3: Defer reply FIRST before any async operations
-            await interaction.deferReply({ flags: 64 }); // Using deferReply instead of deferUpdate
+            // IMPORTANT: Use deferUpdate() to acknowledge the button interaction
+            // This updates the original message and shows "thinking" state
+            await interaction.deferUpdate();
 
             // 📝 PLACE YOUR DATABASE DELETION QUERIES HERE
             // Example: await db.query('DELETE FROM guilds WHERE id = $1', [interaction.guildId]);
             
-            // Fix 4: Simulate database operation with a small delay
-            // This ensures the defer update goes through
-            await new Promise(resolve => setTimeout(resolve, 100));
+            // Simulate async operation
+            await new Promise(resolve => setTimeout(resolve, 500));
 
-            // Fix 5: Use editReply with proper content
-            await interaction.editReply({
+            // IMPORTANT: Use update() instead of editReply()
+            // Since we used deferUpdate(), we need to use update() to modify the original message
+            await interaction.update({
                 content: `${EMOJIS?.check || '✅'} **Success:** All database structures associated with this guild have been permanently purged.`,
                 embeds: [],
-                components: []
+                components: [] // This removes the buttons
             });
 
         } catch (error) {
             console.error('🚨 CONFIRM BUTTON ERROR CRASH:', error);
             
-            // Fix 6: Handle errors properly - check if we can edit or need to reply
             try {
-                if (interaction.deferred || interaction.replied) {
-                    await interaction.editReply({
-                        content: `${EMOJIS?.cross || '❌'} **System Error:** An internal error blocked full execution of your database purge.`,
-                        embeds: [],
-                        components: []
-                    });
-                } else {
+                // Try to update the original message with error
+                await interaction.update({
+                    content: `${EMOJIS?.cross || '❌'} **System Error:** An internal error blocked full execution of your database purge.`,
+                    embeds: [],
+                    components: []
+                });
+            } catch (updateError) {
+                // If update fails, try to reply with ephemeral error
+                try {
                     await interaction.reply({
-                        content: `${EMOJIS?.cross || '❌'} **System Error:** An internal error blocked full execution of your database purge.`,
+                        content: `${EMOJIS?.cross || '❌'} **System Error:** An internal error occurred.`,
                         flags: 64
                     });
+                } catch (replyError) {
+                    console.error('🚨 Failed to send error response:', replyError);
                 }
-            } catch (editError) {
-                console.error('🚨 Failed to send error response:', editError);
             }
         }
     }
