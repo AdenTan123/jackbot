@@ -1,61 +1,64 @@
 import { EMOJIS } from '../../config/emojis.js';
+import logger from '../../utils/logger.js';
 
 export default {
-    name: 'delete_guild_confirm',
+    name: 'delete_guild_cancel',
 
     async execute(interaction) {
+        const traceId = `${Date.now()}-${Math.random().toString(36).substring(2, 8)}`;
+        
+        logger.info('🔄 DELETE_GUILD_CANCEL: Button interaction received', {
+            traceId,
+            guildId: interaction.guildId,
+            userId: interaction.user.id,
+            userName: interaction.user.tag,
+            interactionType: interaction.type,
+            isReplied: interaction.replied,
+            isDeferred: interaction.deferred
+        });
+
         try {
-            // Check if interaction is already handled
-            if (interaction.replied || interaction.deferred) {
-                return;
-            }
+            logger.info('📝 DELETE_GUILD_CANCEL: Attempting to update message', {
+                traceId,
+                guildId: interaction.guildId,
+                userId: interaction.user.id
+            });
 
-            const permissions = interaction.member?.permissions || interaction.memberPermissions;
-            if (!permissions || !permissions.has('Administrator')) {
-                return interaction.reply({
-                    content: '❌ Only administrators can confirm database purges.',
-                    flags: 64
-                });
-            }
-
-            // IMPORTANT: Use deferUpdate() to acknowledge the button interaction
-            // This updates the original message and shows "thinking" state
-            await interaction.deferUpdate();
-
-            // 📝 PLACE YOUR DATABASE DELETION QUERIES HERE
-            // Example: await db.query('DELETE FROM guilds WHERE id = $1', [interaction.guildId]);
-            
-            // Simulate async operation
-            await new Promise(resolve => setTimeout(resolve, 500));
-
-            // IMPORTANT: Use update() instead of editReply()
-            // Since we used deferUpdate(), we need to use update() to modify the original message
             await interaction.update({
-                content: `${EMOJIS?.check || '✅'} **Success:** All database structures associated with this guild have been permanently purged.`,
+                content: `${EMOJIS?.cross || '❌'} **Action Aborted:** Safe closure executed. No backend data profiles were modified.`,
                 embeds: [],
-                components: [] // This removes the buttons
+                components: []
+            });
+
+            logger.info('✅ DELETE_GUILD_CANCEL: Message updated successfully', {
+                traceId,
+                guildId: interaction.guildId,
+                userId: interaction.user.id
             });
 
         } catch (error) {
-            console.error('🚨 CONFIRM BUTTON ERROR CRASH:', error);
-            
+            logger.error('💥 DELETE_GUILD_CANCEL: Error occurred', {
+                traceId,
+                guildId: interaction.guildId,
+                userId: interaction.user.id,
+                errorName: error.name,
+                errorMessage: error.message,
+                errorStack: error.stack,
+                interactionReplied: interaction.replied,
+                interactionDeferred: interaction.deferred
+            });
+
             try {
-                // Try to update the original message with error
-                await interaction.update({
-                    content: `${EMOJIS?.cross || '❌'} **System Error:** An internal error blocked full execution of your database purge.`,
-                    embeds: [],
-                    components: []
+                await interaction.reply({
+                    content: '❌ An error occurred while cancelling the operation.',
+                    flags: 64
                 });
-            } catch (updateError) {
-                // If update fails, try to reply with ephemeral error
-                try {
-                    await interaction.reply({
-                        content: `${EMOJIS?.cross || '❌'} **System Error:** An internal error occurred.`,
-                        flags: 64
-                    });
-                } catch (replyError) {
-                    console.error('🚨 Failed to send error response:', replyError);
-                }
+            } catch (replyError) {
+                logger.error('💀 DELETE_GUILD_CANCEL: Failed to send error reply', {
+                    traceId,
+                    errorName: replyError.name,
+                    errorMessage: replyError.message
+                });
             }
         }
     }
