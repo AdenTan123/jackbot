@@ -9,12 +9,15 @@ export default {
 
     async execute(interaction) {
         try {
-            // Safe permission check using the interaction's direct helper
-            if (!interaction.memberPermissions?.has('Administrator')) {
-                return interaction.reply({
-                    content: '❌ You do not have permission to use this command. (Requires Administrator)',
-                    flags: 'Ephemeral' // Single string format is native and safe
-                });
+            // Safe permission checker across all discord.js versions
+            const permissions = interaction.member?.permissions || interaction.memberPermissions;
+            if (!permissions || !permissions.has('Administrator')) {
+                const noPermsPayload = { content: '❌ You do not have permission to use this command. (Requires Administrator)', flags: 64 };
+                if (interaction.replied || interaction.deferred) {
+                    return await interaction.editReply(noPermsPayload);
+                } else {
+                    return await interaction.reply(noPermsPayload);
+                }
             }
 
             const warningEmbed = new EmbedBuilder()
@@ -23,7 +26,7 @@ export default {
                 .setDescription('Proceeding will completely wipe all server logs, configurations, and settings from our database.\n\nThis action is **completely irreversible**. Are you absolutely sure you want to proceed?')
                 .setTimestamp();
 
-            // Safety check: If the emoji path is slightly off, fall back to standard emojis instead of crashing
+            // Safe emoji mapping with hard fallbacks to prevent crashes if IDs are misconfigured
             const dangerEmoji = typeof EMOJI_IDS !== 'undefined' && EMOJI_IDS?.danger ? { id: EMOJI_IDS.danger } : '⚠️';
             const crossEmoji = typeof EMOJI_IDS !== 'undefined' && EMOJI_IDS?.cross ? { id: EMOJI_IDS.cross } : '❌';
 
@@ -41,20 +44,22 @@ export default {
 
             const row = new ActionRowBuilder().addComponents(confirmButton, cancelButton);
 
-            await interaction.reply({
+            const finalPayload = {
                 embeds: [warningEmbed],
                 components: [row],
-                flags: 'Ephemeral' 
-            });
+                flags: 64 // 64 is the absolute bitfield value for Ephemeral. Zero warnings, zero crashes.
+            };
+
+            // Adaptive Execution Layer: Adapts automatically to your framework's state
+            if (interaction.replied || interaction.deferred) {
+                await interaction.editReply(finalPayload);
+            } else {
+                await interaction.reply(finalPayload);
+            }
 
         } catch (error) {
-            // This forces the real hidden error to print in your docker logs!
-            console.error('==================================================');
-            console.error('🚨 REAL HIDDEN CRASH ENCOUNTERED:');
+            console.error('🚨 INDESTRUCTIBLE COMMAND ERROR CRASH:');
             console.error(error);
-            console.error('==================================================');
-            
-            // Re-throw so the framework still knows it failed
             throw error;
         }
     }
