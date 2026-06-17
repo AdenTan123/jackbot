@@ -20,7 +20,7 @@ export default {
         // 1. Scan the servers the bot is in to find where a contest is active
         const guilds = client.guilds.cache;
         for (const [guildId, guild] of guilds) {
-          // Optimization: Verify the user is actually a member of that server
+          // Verify the user is actually a member of that server
           const isMember = await guild.members.fetch(message.author.id).catch(() => null);
           if (!isMember) continue;
 
@@ -43,12 +43,26 @@ export default {
         }
 
         // 3. Locate the target logging channel set by your /competition command
-        const targetChannelId = compConfig.categoryId || compConfig.category;
-        const targetChannel = await client.channels.fetch(targetChannelId).catch(() => null);
+        const targetId = compConfig.categoryId || compConfig.category;
+        let targetChannel = await client.channels.fetch(targetId).catch(() => null);
 
         if (!targetChannel) {
-          logger.error(`Competition Submission Error: Channel/Category ID ${targetChannelId} could not be resolved.`);
+          logger.error(`Competition Submission Error: Channel/Category ID ${targetId} could not be resolved.`);
           return await message.reply("❌ The competition submission channel is misconfigured on the server. Please notify an Administrator.");
+        }
+
+        // 🔄 DYNAMIC FIX: If the target ID is a Category, automatically find the first text channel inside it
+        if (targetChannel.type === 4 || !targetChannel.send) { // 4 is ChannelType.GuildCategory
+          const textChannelInside = targetChannel.guild?.channels.cache.find(
+            ch => ch.parentId === targetChannel.id && ch.isTextBased()
+          );
+          
+          if (textChannelInside) {
+            targetChannel = textChannelInside;
+          } else {
+            logger.error(`Competition Submission Error: Channel ${targetId} is a category with no text channels.`);
+            return await message.reply("❌ The competition configuration points to a category folder with no valid text channels inside. Please notify an Administrator.");
+          }
         }
 
         // 4. Wrap up the entry and route it straight to your staff channel
