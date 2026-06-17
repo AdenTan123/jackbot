@@ -17,14 +17,24 @@ const GUILD_CONFIG_DEFAULTS = {
         enabled: false,
         channelId: null,
         enabledEvents: {}
+    },
+    counting: {
+        channelId: null,
+        lastNumber: 0,
+        lastUserId: null,
+        allowMath: true,
+        deleteNonWords: false
+    },
+   
+    competition: {
+        active: false,
+        eventType: null, // 'attachment', 'link', or 'message'
+        maxSubmissions: 1,
+        categoryId: null,
+        category: null,
+        submissions: {} // Format: { "userId": entryCount }
     }
 };
-
-
-
-
-
-
 
 export const getGuildConfig = wrapServiceBoundary(async function getGuildConfig(client, guildId, context = {}) {
     const config = await getGuildConfigDb(client, guildId, context);
@@ -37,13 +47,6 @@ export const getGuildConfig = wrapServiceBoundary(async function getGuildConfig(
     userMessage: 'Failed to load server configuration. Please try again.'
 });
 
-
-
-
-
-
-
-
 export const setGuildConfig = wrapServiceBoundary(async function setGuildConfig(client, guildId, config, context = {}) {
     const normalized = normalizeGuildConfig(config, GUILD_CONFIG_DEFAULTS);
     const validated = validateGuildConfigOrThrow(normalized, { guildId, ...context });
@@ -54,13 +57,6 @@ export const setGuildConfig = wrapServiceBoundary(async function setGuildConfig(
     message: 'Failed to save guild configuration',
     userMessage: 'Failed to save server configuration. Please try again.'
 });
-
-
-
-
-
-
-
 
 export const updateGuildConfig = wrapServiceBoundary(async function updateGuildConfig(client, guildId, updates, context = {}) {
     const currentConfig = await getGuildConfigDb(client, guildId, context);
@@ -75,14 +71,6 @@ export const updateGuildConfig = wrapServiceBoundary(async function updateGuildC
     userMessage: 'Failed to update server configuration. Please try again.'
 });
 
-
-
-
-
-
-
-
-
 export const getConfigValue = wrapServiceBoundary(async function getConfigValue(client, guildId, key, defaultValue = null, context = {}) {
     const config = await getGuildConfig(client, guildId, context);
     return config[key] !== undefined ? config[key] : defaultValue;
@@ -92,14 +80,6 @@ export const getConfigValue = wrapServiceBoundary(async function getConfigValue(
     message: 'Failed to read guild configuration value',
     userMessage: 'Failed to read a server setting. Please try again.'
 });
-
-
-
-
-
-
-
-
 
 export const setConfigValue = wrapServiceBoundary(async function setConfigValue(client, guildId, key, value, context = {}) {
     return await updateGuildConfig(client, guildId, { [key]: value }, context);

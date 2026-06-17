@@ -66,11 +66,19 @@ export default {
         const cfg = await getGuildConfig(interaction.client, guildId).catch(() => ({}));
         const comp = cfg.competition || {};
         
+        // 🛡️ MULTI-GUILD SAFEGUARD: Force them to assign a unique local channel first!
+        if (!comp.categoryId && !comp.category) {
+          return await InteractionHelper.safeEditReply(interaction, {
+            embeds: [errorEmbed(
+              'Configuration Channel Missing', 
+              'You must configure a logging target channel for this specific server first!\n\nRun `/competition category category:<channel_id>` before starting the event.'
+            )]
+          });
+        }
+        
         comp.active = true;
         comp.eventType = eventType;
         comp.maxSubmissions = submissionsAmt;
-        comp.categoryId = comp.categoryId || '1513833221832572989';
-        comp.category = comp.category || '1513833221832572989';
         comp.submissions = comp.submissions || {}; 
 
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
@@ -97,12 +105,15 @@ export default {
         const cfg = await getGuildConfig(interaction.client, guildId).catch(() => ({}));
         const comp = cfg.competition || {};
         
-        comp.category = category;
-        comp.categoryId = category; 
+        // Clean off any brackets or formatting if they pasted raw channel mentions like <#1234>
+        const cleanId = category.replace(/[<#>]/g, '');
+        
+        comp.category = cleanId;
+        comp.categoryId = cleanId; 
         
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
         return await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(`Category channel set to ${category}`, 'Submissions will route to this configuration channel.')]
+          embeds: [successEmbed(`Category channel configured!`, `Submissions for this server will now route to channel ID: \`${cleanId}\`.`)]
         });
       }
 
