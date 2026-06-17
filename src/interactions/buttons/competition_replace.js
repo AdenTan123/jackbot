@@ -1,77 +1,88 @@
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
-import { getFromDb, deleteFromDb } from '../../utils/database.js';
+import { getFromDb, deleteFromDb } from '../../utils/database.js'; // Ensure these match your database.js exports
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
 import { logger } from '../../utils/logger.js';
 
 export default {
   name: 'competition_replace',
-  async execute(interaction, client, args) {
+  async execute(interaction) {
     try {
-      const choice = args[0]; // 'yes' or 'no'
-      const guildId = args[1];
-      const userId = args[2];
+      // Parse the customId (format: competition_replace:choice:guildId:userId)
+      const [_, choice, guildId, userId] = interaction.customId.split(':');
 
       if (!guildId || !userId) {
         return interaction.reply({ embeds: [errorEmbed('Error', 'Invalid replacement request.')], ephemeral: true });
       }
 
+      // Security: Only the user who made the request can click "Yes"
+      if (interaction.user.id !== userId) {
+        return interaction.reply({ content: "❌ This is not your submission to replace.", ephemeral: true });
+      }
+
       const pendingKey = `competition_pending:${guildId}:${userId}`;
-      const pending = await getFromDb(pendingKey, null);
+      const pending = await getFromDb(pendingKey);
 
       if (!pending) {
-        return interaction.reply({ embeds: [errorEmbed('No pending submission', 'There is no pending submission to apply.')], ephemeral: true });
+        return interaction.reply({ embeds: [errorEmbed('Expired', 'Your pending submission request has expired.')], ephemeral: true });
       }
 
       if (choice === 'no') {
         await deleteFromDb(pendingKey);
-        try { await interaction.message.edit({ components: [] }).catch(() => {}); } catch(e){}
+        await interaction.message.delete().catch(() => {});
         return interaction.reply({ embeds: [successEmbed('Cancelled', 'Your previous submission remains unchanged.')], ephemeral: true });
       }
 
-      // apply replacement
-      const cfg = await getGuildConfig(client, guildId).catch(() => ({}));
+      // === Apply Replacement ===
+      await interaction.deferUpdate(); // Defer because channel operations can take time
+
+      const cfg = await getGuildConfig(interaction.client, guildId).catch(() => ({}));
       const comp = cfg.competition || {};
       const submissions = comp.submissions || {};
       const existing = submissions[userId];
 
       if (!existing) {
         await deleteFromDb(pendingKey);
-        return interaction.reply({ embeds: [errorEmbed('Not found', 'Original submission not found.')], ephemeral: true });
+        return interaction.followUp({ embeds: [errorEmbed('Not found', 'Original submission not found.')], ephemeral: true });
       }
 
       try {
-        const guild = await client.guilds.fetch(guildId).catch(() => null);
+        const guild = await interaction.client.guilds.fetch(guildId).catch(() => null);
         if (!guild) throw new Error('Guild not accessible');
 
         const ch = await guild.channels.fetch(existing.channelId).catch(() => null);
-        if (!ch) throw new Error('Submission channel not found');
-
-        // remove previous messages in the channel
-        try {
-          let fetched;
-          do {
-            fetched = await ch.messages.fetch({ limit: 100 }).catch(() => null);
-            if (!fetched || fetched.size === 0) break;
-            const deletable = fetched.filter(m => (Date.now() - m.createdTimestamp) < 14 * 24 * 60 * 60 * 1000);
-            if (deletable.size > 0) await ch.bulkDelete(deletable, true).catch(() => null);
-            else break;
-          } while (fetched && fetched.size > 0);
-        } catch (purgeErr) {
-          logger.warn('Failed to purge previous submission messages:', purgeErr?.message || purgeErr);
+        
+        // 1. Try to delete the OLD submission message specifically
+        if (ch && existing.messageId) {
+          const oldMsg = await ch.messages.fetch(existing.messageId).catch(() => null);
+          if (oldMsg) await oldMsg.delete().catch(() => null);
         }
 
-        const sent = await ch.send({ files: [pending.url], content: `Submission replacement from <@${userId}>` }).catch(err => { throw err; });
+        // 2. Send the NEW submission message
+        const sent = await ch.send({ 
+            content: `**Updated Submission from <@${userId}>**`,
+            files: pending.url.startsWith('http') ? [pending.url] : [],
+            embeds: [/* You can reconstruct the embed here if you saved it, or just send raw content */]
+        }).catch(err => { throw err; });
 
-        submissions[userId] = { channelId: ch.id, messageId: sent?.id || null, url: pending.url };
+        // 3. Update the config with the new message ID and URL
+        submissions[userId] = { 
+            channelId: ch.id, 
+            messageId: sent?.id || null, 
+            url: pending.url 
+        };
+        
         comp.submissions = submissions;
-        await updateGuildConfig(client, guildId, { competition: comp }).catch(() => {});
+        await updateGuildConfig(interaction.client, guildId, { competition: comp }).catch(() => {});
+        
+        // 4. Cleanup
         await deleteFromDb(pendingKey);
-        try { await interaction.message.edit({ components: [] }).catch(() => {}); } catch(e){}
-        return interaction.reply({ embeds: [successEmbed('Replaced', 'Your submission has been replaced.')], ephemeral: true });
+        await interaction.message.delete().catch(() => {});
+        
+        return interaction.followUp({ embeds: [successEmbed('Replaced', 'Your submission has been replaced.')], ephemeral: true });
       } catch (error) {
         logger.error('Failed to apply competition replacement:', error);
         await deleteFromDb(pendingKey);
-        return interaction.reply({ embeds: [errorEmbed('Replacement failed', 'Could not replace submission.')], ephemeral: true });
+        return interaction.followUp({ embeds: [errorEmbed('Replacement failed', 'Could not replace submission.')], ephemeral: true });
       }
     } catch (error) {
       logger.error('competition_replace button handler error', error);
