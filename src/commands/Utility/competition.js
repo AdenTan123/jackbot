@@ -66,7 +66,7 @@ export default {
         const cfg = await getGuildConfig(interaction.client, guildId).catch(() => ({}));
         const comp = cfg.competition || {};
         
-        // 🛡️ MULTI-GUILD SAFEGUARD: Force them to assign a unique local channel first!
+        // MULTI-GUILD SAFEGUARD: Force them to assign a unique local channel first
         if (!comp.categoryId && !comp.category) {
           return await InteractionHelper.safeEditReply(interaction, {
             embeds: [errorEmbed(
@@ -79,13 +79,15 @@ export default {
         comp.active = true;
         comp.eventType = eventType;
         comp.maxSubmissions = submissionsAmt;
-        comp.submissions = comp.submissions || {}; 
+        
+        // FIX: Completely wipe out past submission logs so users can enter again
+        comp.submissions = {}; 
 
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
         return await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(
             'Competition Started Successfully', 
-            `**Allowed Format:** ${eventType.toUpperCase()}\n**Max Entries Per User:** ${submissionsAmt}\n\nUsers may now DM entries directly to the bot.`
+            `**Allowed Format:** ${eventType.toUpperCase()}\n**Max Entries Per User:** ${submissionsAmt}\n\nAll previous submission metrics have been cleared. Users may now submit entries via DM.`
           )]
         });
       }
