@@ -1,8 +1,8 @@
-import { Events, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ActionRowBuilder, ChannelType } from 'discord.js';
+import { Events, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import { getGuildConfig, updateGuildConfig } from '../services/guildConfig.js';
+import { setIntoDb } from '../utils/database.js'; // ⚠️ Added to stage pending replacements
 import { logger } from '../utils/logger.js';
 
-// Internal formatting validation rules processor
 function checkSubmissionRules(type, content, attachment) {
   if (type === 'attachment' && !attachment) {
     return "⚠️ This server's competition rules require an attached file or image submission.";
@@ -34,7 +34,6 @@ export default {
         const activeGuildsForUser = [];
         const guilds = client.guilds.cache;
 
-        // Loop across mutual servers to map active configurations matching user profile
         for (const [guildId, guild] of guilds) {
           const isMember = await guild.members.fetch(message.author.id).catch(() => null);
           if (!isMember) continue;
@@ -53,7 +52,6 @@ export default {
           return await message.reply("❌ There are currently no active competitions accepting submissions in servers you share with the bot.");
         }
 
-        // Cache runtime elements safely
         const attachmentUrl = message.attachments.first()?.url || null;
         client.tempSubmissions.set(message.author.id, {
           content: message.content,
@@ -92,9 +90,33 @@ export default {
           return await message.reply(ruleViolation);
         }
 
-        const currentEntries = compConfig.submissions?.[message.author.id] || 0;
+        // 🔥 FIX: Check submission limits using object record schemas instead of plain digits
+        const existingRecord = compConfig.submissions?.[message.author.id];
+        const currentEntries = existingRecord ? 1 : 0; // Adapting tracking to 1 submission entry record object limits
+
+        // 🔄 TRIGGER ACTION LAYER: Ask user if they want to overwrite their old entry
         if (currentEntries >= (compConfig.maxSubmissions || 1)) {
-          return await message.reply(`❌ **Submission Limit Reached:** You have already submitted the maximum allowed entries (${currentEntries}/${compConfig.maxSubmissions || 1}) for **${singleTarget.name}**.`);
+          const pendingKey = `competition_pending:${singleTarget.id}:${message.author.id}`;
+          await setIntoDb(pendingKey, {
+            content: message.content,
+            url: attachmentUrl || message.content
+          });
+
+          const replacementButtons = new ActionRowBuilder().addComponents(
+            new ButtonBuilder()
+              .setCustomId(`competition_replace:yes:${singleTarget.id}:${message.author.id}`)
+              .setLabel('Yes, Replace It')
+              .setStyle(ButtonStyle.Danger),
+            new ButtonBuilder()
+              .setCustomId(`competition_replace:no:${singleTarget.id}:${message.author.id}`)
+              .setLabel('Cancel')
+              .setStyle(ButtonStyle.Secondary)
+          );
+
+          return await message.reply({
+            content: `⚠️ **Submission Limit Reached:** You already have an entry submitted to **${singleTarget.name}**.\nWould you like to replace your previous submission with this new one?`,
+            components: [replacementButtons]
+          });
         }
 
         let targetId = compConfig.categoryId || compConfig.category;
@@ -118,17 +140,22 @@ export default {
 
         if (attachmentUrl) submissionEmbed.setImage(attachmentUrl);
 
-        await targetChannel.send({ embeds: [submissionEmbed] });
+        const sentMessage = await targetChannel.send({ embeds: [submissionEmbed] });
 
+        // 🔥 FIX: Store data parameters structured exactly how competition_replace read loops expect it
         compConfig.submissions = compConfig.submissions || {};
-        compConfig.submissions[message.author.id] = currentEntries + 1;
+        compConfig.submissions[message.author.id] = {
+          channelId: targetChannel.id,
+          messageId: sentMessage.id,
+          url: attachmentUrl || message.content
+        };
         
         const fullConfig = await getGuildConfig(client, singleTarget.id).catch(() => ({}));
         fullConfig.competition = compConfig;
         await updateGuildConfig(client, singleTarget.id, fullConfig);
 
         client.tempSubmissions.delete(message.author.id);
-        return await message.reply(`✅ **Submission Logged successfully to ${singleTarget.name}!** (${currentEntries + 1}/${compConfig.maxSubmissions || 1})`);
+        return await message.reply(`✅ **Submission Logged successfully to ${singleTarget.name}!**`);
 
       } catch (err) {
         logger.error('DM Router exception caught:', err);
