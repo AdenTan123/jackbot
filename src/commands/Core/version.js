@@ -3,7 +3,7 @@ import { createEmbed } from '../../utils/embeds.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 
 // Define your current bot version here. Update as needed.
-const CURRENT_VERSION = 'v1.5.0';
+const CURRENT_VERSION = 'v1.5.1';
 
 export default {
   data: new SlashCommandBuilder()
