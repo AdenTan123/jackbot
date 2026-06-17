@@ -112,7 +112,11 @@ export default {
     if (interaction.isChatInputCommand()) {
       const command = interaction.client.commands.get(interaction.commandName);
       if (!command) return;
-      try { await command.execute(interaction); } catch (e) { console.error(e); }
+      try { 
+        await command.execute(interaction); 
+      } catch (e) { 
+        console.error('Command Execution Error:', e); 
+      }
       return;
     }
 
@@ -120,13 +124,16 @@ export default {
       const [prefix, action, targetId] = interaction.customId.split(':');
       if (prefix !== 'shiftmodal') return;
 
+      // Stop interaction timing issues immediately during database updates
+      await interaction.deferUpdate().catch(() => {});
+
       const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
       cfg.userShifts = cfg.userShifts || {};
       const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
       
       const inputMinutes = parseInt(interaction.fields.getTextInputValue('minutes_input'), 10);
       if (isNaN(inputMinutes) || inputMinutes < 0) {
-        return interaction.reply({ content: `${EMOJIS.cross} Invalid whole number input.`, flags: ['Ephemeral'] });
+        return interaction.followUp({ content: `${EMOJIS.cross} Invalid whole number input.`, flags: ['Ephemeral'] });
       }
 
       if (action === 'set') shift.duration = inputMinutes;
@@ -137,7 +144,7 @@ export default {
       await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
 
       const render = renderUpdatedInterface('admin', targetId, shift);
-      return await interaction.update(render);
+      return await interaction.editReply(render);
     }
 
     if (interaction.isButton()) {
@@ -145,51 +152,50 @@ export default {
       if (prefix !== 'shift') return;
 
       try {
-        const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
-        cfg.userShifts = cfg.userShifts || {};
-        const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
-
-        const save = async () => {
-          cfg.userShifts[targetId] = shift;
-          await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
-        };
-
         if (scope === 'admin' && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
           return interaction.reply({ content: `${EMOJIS.danger} Admin permissions required.`, flags: ['Ephemeral'] });
         }
 
-        if (action === 'start') {
-          shift.status = 'Active';
-          shift.startedAt = new Date().toISOString();
-          await save();
-          const render = renderUpdatedInterface(scope, targetId, shift);
-          return await interaction.update(render);
-        }
+        // Action steps: start, pause, end must be deferred up front
+        if (['start', 'pause', 'end'].includes(action)) {
+          await interaction.deferUpdate().catch(() => {});
+          
+          const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
+          cfg.userShifts = cfg.userShifts || {};
+          const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
 
-        if (action === 'pause') {
-          if (shift.status === 'Active' && shift.startedAt) {
-            const elapsedMs = new Date() - new Date(shift.startedAt);
-            shift.duration += Math.floor(elapsedMs / 60000);
+          const save = async () => {
+            cfg.userShifts[targetId] = shift;
+            await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
+          };
+
+          if (action === 'start') {
+            shift.status = 'Active';
+            shift.startedAt = new Date().toISOString();
+            await save();
+          } else if (action === 'pause') {
+            if (shift.status === 'Active' && shift.startedAt) {
+              const elapsedMs = new Date() - new Date(shift.startedAt);
+              shift.duration += Math.floor(elapsedMs / 60000);
+            }
+            shift.status = 'Paused';
+            shift.startedAt = null;
+            await save();
+          } else if (action === 'end') {
+            if (shift.status === 'Active' && shift.startedAt) {
+              const elapsedMs = new Date() - new Date(shift.startedAt);
+              shift.duration += Math.floor(elapsedMs / 60000);
+            }
+            shift.status = 'Inactive';
+            shift.startedAt = null;
+            await save();
           }
-          shift.status = 'Paused';
-          shift.startedAt = null;
-          await save();
+
           const render = renderUpdatedInterface(scope, targetId, shift);
-          return await interaction.update(render);
+          return await interaction.editReply(render);
         }
 
-        if (action === 'end') {
-          if (shift.status === 'Active' && shift.startedAt) {
-            const elapsedMs = new Date() - new Date(shift.startedAt);
-            shift.duration += Math.floor(elapsedMs / 60000);
-          }
-          shift.status = 'Inactive';
-          shift.startedAt = null;
-          await save();
-          const render = renderUpdatedInterface(scope, targetId, shift);
-          return await interaction.update(render);
-        }
-
+        // Modals pass through without deferment
         if (['set', 'add', 'dec'].includes(action)) {
           const modalTitles = { set: 'Set Total Time', add: 'Add Time Record', dec: 'Decrease Time Record' };
           const modalFields = { set: 'Enter exact minutes total:', add: 'Minutes to add:', dec: 'Minutes to subtract:' };
