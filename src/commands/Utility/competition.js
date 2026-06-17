@@ -1,6 +1,6 @@
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
-import { createEmbed, successEmbed, errorEmbed } from '../../utils/embeds.js';
+import { successEmbed, errorEmbed } from '../../utils/embeds.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
 import { logger } from '../../utils/logger.js';
 
@@ -9,11 +9,30 @@ export default {
     .setName('competition')
     .setDescription('Manage temporary competitions (start/end/category)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
-    .setDMPermission(false) // 🛡️ CRITICAL: Prevents running this setup command in DMs (avoids null guildId crashes)
+    .setDMPermission(false)
     .addSubcommand(s =>
       s
         .setName('start')
-        .setDescription('Start accepting DM submissions')
+        .setDescription('Start accepting DM submissions with specific format rules')
+        .addStringOption(o =>
+          o
+            .setName('event_type')
+            .setDescription('The required entry format type')
+            .setRequired(true)
+            .addChoices(
+              { name: 'Attachment (Images/Files)', value: 'attachment' },
+              { name: 'Link (URLs)', value: 'link' },
+              { name: 'Message (Text)', value: 'message' }
+            )
+        )
+        .addIntegerOption(o =>
+          o
+            .setName('submissions_amt')
+            .setDescription('Maximum entry limit per user (1-5)')
+            .setRequired(true)
+            .setMinValue(1)
+            .setMaxValue(5)
+        )
     )
     .addSubcommand(s =>
       s
@@ -23,11 +42,11 @@ export default {
     .addSubcommand(s =>
       s
         .setName('category')
-        .setDescription('Set the competition submission category for this server')
+        .setDescription('Set the competition submission channel/category for this server')
         .addStringOption(o =>
           o
             .setName('category')
-            .setDescription('Category name or ID to use for submissions')
+            .setDescription('Channel name or ID to use for submissions')
             .setRequired(true)
         )
     ),
@@ -41,16 +60,25 @@ export default {
       const guildId = interaction.guildId;
 
       if (sub === 'start') {
+        const eventType = interaction.options.getString('event_type');
+        const submissionsAmt = interaction.options.getInteger('submissions_amt');
+
         const cfg = await getGuildConfig(interaction.client, guildId).catch(() => ({}));
         const comp = cfg.competition || {};
-        comp.active = true;
-        comp.categoryId = comp.categoryId || '1513833221832572989';
-        comp.category = comp.category || '1513833221832572989'; // Sync property names
-        comp.submissions = comp.submissions || {};
         
+        comp.active = true;
+        comp.eventType = eventType;
+        comp.maxSubmissions = submissionsAmt;
+        comp.categoryId = comp.categoryId || '1513833221832572989';
+        comp.category = comp.category || '1513833221832572989';
+        comp.submissions = comp.submissions || {}; 
+
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
         return await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed('Competition started', 'Users may now DM the bot their image submissions.')]
+          embeds: [successEmbed(
+            'Competition Started Successfully', 
+            `**Allowed Format:** ${eventType.toUpperCase()}\n**Max Entries Per User:** ${submissionsAmt}\n\nUsers may now DM entries directly to the bot.`
+          )]
         });
       }
 
@@ -60,7 +88,7 @@ export default {
         comp.active = false;
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
         return await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed('Competition ended', 'Submissions are now closed.')]
+          embeds: [successEmbed('Competition Ended', 'Submissions are now closed.')]
         });
       }
 
@@ -69,13 +97,12 @@ export default {
         const cfg = await getGuildConfig(interaction.client, guildId).catch(() => ({}));
         const comp = cfg.competition || {};
         
-        // 🔄 Sync both tracking fields so your DM text processing file doesn't lose track of it
         comp.category = category;
         comp.categoryId = category; 
         
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
         return await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(`Category set to ${category}`, 'You can now submit posters under this category.')]
+          embeds: [successEmbed(`Category channel set to ${category}`, 'Submissions will route to this configuration channel.')]
         });
       }
 

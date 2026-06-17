@@ -1,161 +1,195 @@
-import { Events, EmbedBuilder } from 'discord.js';
+import { Events, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ActionRowBuilder, ChannelType } from 'discord.js';
 import { getGuildConfig, updateGuildConfig } from '../services/guildConfig.js';
 import { logger } from '../utils/logger.js';
+
+// Internal formatting validation rules processor
+function checkSubmissionRules(type, content, attachment) {
+  if (type === 'attachment' && !attachment) {
+    return "⚠️ This server's competition rules require an attached file or image submission.";
+  }
+  if (type === 'link' && (!content || !/https?:\/\/[^\s]+/.test(content))) {
+    return "⚠️ This server's competition rules require your entry message to contain a valid URL Link (e.g., https://...).";
+  }
+  if (type === 'message' && (!content || content.trim().length === 0)) {
+    return "⚠️ This server's competition rules require a written text message entry.";
+  }
+  return null;
+}
 
 export default {
   name: Events.MessageCreate,
 
   async execute(message, client) {
-    // Global guard: ignore other bots or system messages
     if (message.author.bot || message.system) return;
 
     // =========================================================================
-    // 📬 PATH A: HANDLE DIRECT MESSAGES (Competition Submissions)
+    // 📬 PATH A: DIRECT MESSAGES (Adaptive Multi-Guild Routing)
     // =========================================================================
     if (!message.guild) {
       try {
-        let activeGuildId = null;
-        let compConfig = null;
+        if (!client.tempSubmissions) {
+          client.tempSubmissions = new Map();
+        }
 
-        // 1. Scan the servers the bot is in to find where a contest is active
+        const activeGuildsForUser = [];
         const guilds = client.guilds.cache;
+
+        // Loop across mutual servers to map active configurations matching user profile
         for (const [guildId, guild] of guilds) {
-          // Verify the user is actually a member of that server
           const isMember = await guild.members.fetch(message.author.id).catch(() => null);
           if (!isMember) continue;
 
           const cfg = await getGuildConfig(client, guildId).catch(() => null);
           if (cfg?.competition?.active) {
-            activeGuildId = guildId;
-            compConfig = cfg.competition;
-            break; 
+            activeGuildsForUser.push({
+              id: guildId,
+              name: guild.name,
+              config: cfg.competition
+            });
           }
         }
 
-        // If no server has an active competition running, notify them gently
-        if (!compConfig) {
-          return await message.reply("❌ There are currently no active competitions accepting entries right now.");
+        if (activeGuildsForUser.length === 0) {
+          return await message.reply("❌ There are currently no active competitions accepting submissions in servers you share with the bot.");
         }
 
-        // 2. Validation: Ensure they actually sent an image submission
-        if (message.attachments.size === 0) {
-          return await message.reply("⚠️ Please upload an image or submission file along with your message to enter the competition!");
+        // Cache runtime elements safely
+        const attachmentUrl = message.attachments.first()?.url || null;
+        client.tempSubmissions.set(message.author.id, {
+          content: message.content,
+          attachmentUrl: attachmentUrl,
+          timestamp: Date.now()
+        });
+
+        // CONDITION A: Multiple mutual entries found -> Dispatch select menu
+        if (activeGuildsForUser.length > 1) {
+          const selectMenu = new StringSelectMenuBuilder()
+            .setCustomId('competition_guild_select')
+            .setPlaceholder('Select the destination server...');
+
+          activeGuildsForUser.forEach(g => {
+            selectMenu.addOptions(
+              new StringSelectMenuOptionBuilder()
+                .setLabel(g.name)
+                .setValue(g.id)
+                .setDescription(`Submit entry to ${g.name}`)
+            );
+          });
+
+          const row = new ActionRowBuilder().addComponents(selectMenu);
+          return await message.reply({
+            content: "👋 **Multiple active competitions detected!** Please pick the target server you are submitting this entry to from the menu selection below:",
+            components: [row]
+          });
         }
 
-        // 3. Locate the target logging channel set by your /competition command
-        const targetId = compConfig.categoryId || compConfig.category;
+        // CONDITION B: Exactly 1 matching active server found -> Process automatically
+        const singleTarget = activeGuildsForUser[0];
+        const compConfig = singleTarget.config;
+
+        const ruleViolation = checkSubmissionRules(compConfig.eventType, message.content, attachmentUrl);
+        if (ruleViolation) {
+          return await message.reply(ruleViolation);
+        }
+
+        const currentEntries = compConfig.submissions?.[message.author.id] || 0;
+        if (currentEntries >= (compConfig.maxSubmissions || 1)) {
+          return await message.reply(`❌ **Submission Limit Reached:** You have already submitted the maximum allowed entries (${currentEntries}/${compConfig.maxSubmissions || 1}) for **${singleTarget.name}**.`);
+        }
+
+        let targetId = compConfig.categoryId || compConfig.category;
         let targetChannel = await client.channels.fetch(targetId).catch(() => null);
 
         if (!targetChannel) {
-          logger.error(`Competition Submission Error: Channel/Category ID ${targetId} could not be resolved.`);
-          return await message.reply("❌ The competition submission channel is misconfigured on the server. Please notify an Administrator.");
+          return await message.reply("❌ The logging target channel is misconfigured inside that server. Please contact an Administrator.");
         }
 
-        // 🔄 DYNAMIC FIX: If the target ID is a Category, automatically find the first text channel inside it
-        if (targetChannel.type === 4 || !targetChannel.send) { // 4 is ChannelType.GuildCategory
-          const textChannelInside = targetChannel.guild?.channels.cache.find(
-            ch => ch.parentId === targetChannel.id && ch.isTextBased()
-          );
-          
-          if (textChannelInside) {
-            targetChannel = textChannelInside;
-          } else {
-            logger.error(`Competition Submission Error: Channel ${targetId} is a category with no text channels.`);
-            return await message.reply("❌ The competition configuration points to a category folder with no valid text channels inside. Please notify an Administrator.");
-          }
+        if (targetChannel.type === ChannelType.GuildCategory || !targetChannel.send) {
+          const textInside = targetChannel.guild?.channels.cache.find(ch => ch.parentId === targetChannel.id && ch.isTextBased());
+          if (textInside) targetChannel = textInside;
         }
 
-        // 4. Wrap up the entry and route it straight to your staff channel
-        const entryAttachment = message.attachments.first();
         const submissionEmbed = new EmbedBuilder()
           .setColor('#00FF66')
-          .setTitle('📥 New Competition Submission Received')
+          .setTitle(`📥 Competition Submission | ${singleTarget.name}`)
           .setAuthor({ name: message.author.tag, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
-          .setDescription(`**Submitting User:** <@${message.author.id}> (${message.author.id})\n\n**Caption/Message:**\n${message.content || '*No context text provided.*'}`)
-          .setImage(entryAttachment.url)
+          .setDescription(`**User:** <@${message.author.id}> (${message.author.id})\n\n**Content:**\n${message.content || '*No text message content provided.*'}`)
           .setTimestamp();
+
+        if (attachmentUrl) submissionEmbed.setImage(attachmentUrl);
 
         await targetChannel.send({ embeds: [submissionEmbed] });
 
-        return await message.reply("✅ **Submission Successful!** Your entry has been logged and forwarded to the competition review board. Good luck!");
+        compConfig.submissions = compConfig.submissions || {};
+        compConfig.submissions[message.author.id] = currentEntries + 1;
+        
+        const fullConfig = await getGuildConfig(client, singleTarget.id).catch(() => ({}));
+        fullConfig.competition = compConfig;
+        await updateGuildConfig(client, singleTarget.id, fullConfig);
 
-      } catch (dmError) {
-        logger.error('Error handling DM competition entry processing:', dmError);
-        return await message.reply("❌ An unexpected error disrupted your submission process. Please try again shortly.");
+        client.tempSubmissions.delete(message.author.id);
+        return await message.reply(`✅ **Submission Logged successfully to ${singleTarget.name}!** (${currentEntries + 1}/${compConfig.maxSubmissions || 1})`);
+
+      } catch (err) {
+        logger.error('DM Router exception caught:', err);
+        return await message.reply("❌ An unexpected tracking error disrupted your submission context.");
       }
     }
 
     // =========================================================================
-    // 🎲 PATH B: HANDLE SERVER MESSAGES (Counting Game Context)
+    // 🎲 PATH B: SERVER CONTEXT (Counting Game Logic)
     // =========================================================================
     try {
-      // 1. Fetch the server's configuration
       const cfg = await getGuildConfig(client, message.guildId).catch(() => null);
-      
-      // If counting isn't configured, or this isn't the assigned counting channel, do nothing
       if (!cfg?.counting || message.channel.id !== cfg.counting.channelId) return;
 
       const content = message.content.trim();
       let currentCount = NaN;
 
-      // 2. Parse the number from the message based on your rules
       if (/^[0-9]+$/.test(content)) {
         currentCount = parseInt(content, 10);
       } else if (cfg.counting.allowMath && /^[0-9+\-*/().\s]+$/.test(content)) {
         try {
-          // Safely evaluate simple arithmetic expressions (e.g., "4+1") without full eval strings
           currentCount = Function(`"use strict"; return (${content})`)();
         } catch {
           currentCount = NaN;
         }
       }
 
-      // 3. Handle messages that aren't valid numbers/math expressions
       if (isNaN(currentCount)) {
         if (cfg.counting.deleteNonWords) {
           await message.delete().catch(() => null);
         }
-        return; // Skip processing game rules for normal chatter if deleteNonWords is turned off
+        return;
       }
 
-      // Initialize runtime state if they are missing
       const lastNumber = cfg.counting.lastNumber ?? 0;
       const lastUserId = cfg.counting.lastUserId ?? null;
       const nextNumber = lastNumber + 1;
 
-      // 4. RULE: You can't count twice in a row
       if (message.author.id === lastUserId) {
         await message.react('❌').catch(() => null);
-        
         cfg.counting.lastNumber = 0;
         cfg.counting.lastUserId = null;
         await updateGuildConfig(client, message.guildId, cfg);
-
         await message.channel.send(`❌ **${message.author.username}** ruined the count! You cannot count twice in a row. Next number is **1**.`);
         return;
       }
 
-      // 5. RULE: Check if it's the right number
       if (currentCount === nextNumber) {
-        // SUCCESS ✅
         await message.react('✅').catch(() => null);
-        
         cfg.counting.lastNumber = nextNumber;
         cfg.counting.lastUserId = message.author.id;
         await updateGuildConfig(client, message.guildId, cfg);
       } else {
-        // RUINED ❌
         await message.react('❌').catch(() => null);
-        
         cfg.counting.lastNumber = 0;
         cfg.counting.lastUserId = null;
         await updateGuildConfig(client, message.guildId, cfg);
-
         await message.channel.send(`❌ **${message.author.username}** ruined the count! They said **${content}** instead of **${nextNumber}**. Next number is **1**.`);
       }
-
     } catch (error) {
-      logger.error('Error handling counting game message processing:', error);
+      logger.error('Error handling counting game processing:', error);
     }
-  },
+  }
 };
