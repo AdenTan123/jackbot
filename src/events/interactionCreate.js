@@ -109,6 +109,8 @@ function renderUpdatedInterface(scope, targetId, shift) {
 export default {
   name: 'interactionCreate',
   async execute(interaction) {
+    
+    // 1. SLASH COMMANDS
     if (interaction.isChatInputCommand()) {
       const command = interaction.client.commands.get(interaction.commandName);
       if (!command) return;
@@ -120,6 +122,22 @@ export default {
       return;
     }
 
+    // ==========================================================
+    // 2. SELECT MENUS (ADDED THIS BLOCK FOR YOUR DROPDOWNS)
+    // ==========================================================
+    if (interaction.isStringSelectMenu()) {
+      const selectMenuHandler = interaction.client.selectMenus?.get(interaction.customId);
+      if (!selectMenuHandler) return;
+
+      try {
+        await selectMenuHandler.execute(interaction);
+      } catch (e) {
+        console.error('Select Menu Execution Error:', e);
+      }
+      return;
+    }
+
+    // 3. MODALS (Shift system)
     if (interaction.isModalSubmit()) {
       const [prefix, action, targetId] = interaction.customId.split(':');
       if (prefix !== 'shiftmodal') return;
@@ -147,6 +165,7 @@ export default {
       return await interaction.editReply(render);
     }
 
+    // 4. BUTTONS (Shift system)
     if (interaction.isButton()) {
       const [prefix, scope, action, targetId] = interaction.customId.split(':');
       if (prefix !== 'shift') return;
