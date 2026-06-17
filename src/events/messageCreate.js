@@ -1,6 +1,9 @@
 import { Events, EmbedBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, ChannelType } from 'discord.js';
 import { getGuildConfig, updateGuildConfig } from '../services/guildConfig.js';
-import { setIntoDb } from '../utils/database.js'; // ⚠️ Added to stage pending replacements
+
+// 🔥 FIXED: Imported the correct function name based on your database.js file
+import { setInDb } from '../utils/database.js'; 
+
 import { logger } from '../utils/logger.js';
 
 function checkSubmissionRules(type, content, attachment) {
@@ -32,20 +35,21 @@ export default {
         }
 
         const activeGuildsForUser = [];
-        const guilds = client.guilds.cache;
+        
+        // Loop guilds safely. 
+        for (const guild of client.guilds.cache.values()) {
+          const cfg = await getGuildConfig(client, guild.id).catch(() => null);
+          
+          if (!cfg?.competition?.active) continue;
 
-        for (const [guildId, guild] of guilds) {
-          const isMember = await guild.members.fetch(message.author.id).catch(() => null);
+          const isMember = guild.members.cache.has(message.author.id) || await guild.members.fetch(message.author.id).catch(() => null);
           if (!isMember) continue;
 
-          const cfg = await getGuildConfig(client, guildId).catch(() => null);
-          if (cfg?.competition?.active) {
-            activeGuildsForUser.push({
-              id: guildId,
-              name: guild.name,
-              config: cfg.competition
-            });
-          }
+          activeGuildsForUser.push({
+            id: guild.id,
+            name: guild.name,
+            config: cfg.competition
+          });
         }
 
         if (activeGuildsForUser.length === 0) {
@@ -90,14 +94,15 @@ export default {
           return await message.reply(ruleViolation);
         }
 
-        // 🔥 FIX: Check submission limits using object record schemas instead of plain digits
         const existingRecord = compConfig.submissions?.[message.author.id];
-        const currentEntries = existingRecord ? 1 : 0; // Adapting tracking to 1 submission entry record object limits
+        const currentEntries = existingRecord ? 1 : 0; 
 
         // 🔄 TRIGGER ACTION LAYER: Ask user if they want to overwrite their old entry
         if (currentEntries >= (compConfig.maxSubmissions || 1)) {
           const pendingKey = `competition_pending:${singleTarget.id}:${message.author.id}`;
-          await setIntoDb(pendingKey, {
+          
+          // 🔥 FIXED: Using the newly corrected setInDb function call here!
+          await setInDb(pendingKey, {
             content: message.content,
             url: attachmentUrl || message.content
           });
@@ -142,7 +147,6 @@ export default {
 
         const sentMessage = await targetChannel.send({ embeds: [submissionEmbed] });
 
-        // 🔥 FIX: Store data parameters structured exactly how competition_replace read loops expect it
         compConfig.submissions = compConfig.submissions || {};
         compConfig.submissions[message.author.id] = {
           channelId: targetChannel.id,
