@@ -9,6 +9,7 @@ export default {
     .setName('competition')
     .setDescription('Manage temporary competitions (start/end/category)')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
+    .setDMPermission(false) // 🛡️ CRITICAL: Prevents running this setup command in DMs (avoids null guildId crashes)
     .addSubcommand(s =>
       s
         .setName('start')
@@ -44,7 +45,9 @@ export default {
         const comp = cfg.competition || {};
         comp.active = true;
         comp.categoryId = comp.categoryId || '1513833221832572989';
+        comp.category = comp.category || '1513833221832572989'; // Sync property names
         comp.submissions = comp.submissions || {};
+        
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
         return await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed('Competition started', 'Users may now DM the bot their image submissions.')]
@@ -65,9 +68,11 @@ export default {
         const category = interaction.options.getString('category');
         const cfg = await getGuildConfig(interaction.client, guildId).catch(() => ({}));
         const comp = cfg.competition || {};
-        // Store the category name/ID under a dedicated field.
-        // Using `category` (instead of `categoryId`) avoids clashing with the existing `categoryId` field.
+        
+        // 🔄 Sync both tracking fields so your DM text processing file doesn't lose track of it
         comp.category = category;
+        comp.categoryId = category; 
+        
         await updateGuildConfig(interaction.client, guildId, { competition: comp });
         return await InteractionHelper.safeEditReply(interaction, {
           embeds: [successEmbed(`Category set to ${category}`, 'You can now submit posters under this category.')]

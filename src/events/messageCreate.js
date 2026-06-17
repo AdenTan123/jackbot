@@ -1,4 +1,4 @@
-import { Events } from 'discord.js';
+import { Events, EmbedBuilder } from 'discord.js';
 import { getGuildConfig, updateGuildConfig } from '../services/guildConfig.js';
 import { logger } from '../utils/logger.js';
 
@@ -6,9 +6,74 @@ export default {
   name: Events.MessageCreate,
 
   async execute(message, client) {
-    // Ignore direct messages, other bots, or system messages
-    if (!message.guild || message.author.bot || message.system) return;
+    // Global guard: ignore other bots or system messages
+    if (message.author.bot || message.system) return;
 
+    // =========================================================================
+    // 📬 PATH A: HANDLE DIRECT MESSAGES (Competition Submissions)
+    // =========================================================================
+    if (!message.guild) {
+      try {
+        let activeGuildId = null;
+        let compConfig = null;
+
+        // 1. Scan the servers the bot is in to find where a contest is active
+        const guilds = client.guilds.cache;
+        for (const [guildId, guild] of guilds) {
+          // Optimization: Verify the user is actually a member of that server
+          const isMember = await guild.members.fetch(message.author.id).catch(() => null);
+          if (!isMember) continue;
+
+          const cfg = await getGuildConfig(client, guildId).catch(() => null);
+          if (cfg?.competition?.active) {
+            activeGuildId = guildId;
+            compConfig = cfg.competition;
+            break; 
+          }
+        }
+
+        // If no server has an active competition running, notify them gently
+        if (!compConfig) {
+          return await message.reply("❌ There are currently no active competitions accepting entries right now.");
+        }
+
+        // 2. Validation: Ensure they actually sent an image submission
+        if (message.attachments.size === 0) {
+          return await message.reply("⚠️ Please upload an image or submission file along with your message to enter the competition!");
+        }
+
+        // 3. Locate the target logging channel set by your /competition command
+        const targetChannelId = compConfig.categoryId || compConfig.category;
+        const targetChannel = await client.channels.fetch(targetChannelId).catch(() => null);
+
+        if (!targetChannel) {
+          logger.error(`Competition Submission Error: Channel/Category ID ${targetChannelId} could not be resolved.`);
+          return await message.reply("❌ The competition submission channel is misconfigured on the server. Please notify an Administrator.");
+        }
+
+        // 4. Wrap up the entry and route it straight to your staff channel
+        const entryAttachment = message.attachments.first();
+        const submissionEmbed = new EmbedBuilder()
+          .setColor('#00FF66')
+          .setTitle('📥 New Competition Submission Received')
+          .setAuthor({ name: message.author.tag, iconURL: message.author.displayAvatarURL({ dynamic: true }) })
+          .setDescription(`**Submitting User:** <@${message.author.id}> (${message.author.id})\n\n**Caption/Message:**\n${message.content || '*No context text provided.*'}`)
+          .setImage(entryAttachment.url)
+          .setTimestamp();
+
+        await targetChannel.send({ embeds: [submissionEmbed] });
+
+        return await message.reply("✅ **Submission Successful!** Your entry has been logged and forwarded to the competition review board. Good luck!");
+
+      } catch (dmError) {
+        logger.error('Error handling DM competition entry processing:', dmError);
+        return await message.reply("❌ An unexpected error disrupted your submission process. Please try again shortly.");
+      }
+    }
+
+    // =========================================================================
+    // 🎲 PATH B: HANDLE SERVER MESSAGES (Counting Game Context)
+    // =========================================================================
     try {
       // 1. Fetch the server's configuration
       const cfg = await getGuildConfig(client, message.guildId).catch(() => null);
