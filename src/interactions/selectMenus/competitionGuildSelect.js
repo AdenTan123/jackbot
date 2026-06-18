@@ -1,5 +1,6 @@
-import { EmbedBuilder, ChannelType } from 'discord.js';
+import { EmbedBuilder, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle } from 'discord.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
+import { setInDb } from '../../utils/database.js'; // 🔥 Added database integration
 import { logger } from '../../utils/logger.js';
 
 export default {
@@ -42,12 +43,32 @@ export default {
         return await interaction.update({ content: `❌ **Format Mismatch:** **${guild.name}** requires clear text message content to register.`, components: [] });
       }
 
-      // Threshold Checking Layer
-      const currentEntries = compConfig.submissions?.[interaction.user.id] || 0;
-      if (currentEntries >= (compConfig.maxSubmissions || 1)) {
+      // =========================================================================
+      // 🔄 THRESHOLD CHECKING LAYER (Offer Replacement Option)
+      // =========================================================================
+      if (compConfig.submissions?.[interaction.user.id]) {
+        const pendingKey = `competition_pending:${selectedGuildId}:${interaction.user.id}`;
+        
+        // Save the data to temporary DB cache so the replacement handler can find it
+        await setInDb(pendingKey, {
+          content: cachedData.content,
+          url: cachedData.attachmentUrl || cachedData.content
+        });
+
+        const replacementButtons = new ActionRowBuilder().addComponents(
+          new ButtonBuilder()
+            .setCustomId(`competition_replace:yes:${selectedGuildId}:${interaction.user.id}`)
+            .setLabel('Yes, Replace It')
+            .setStyle(ButtonStyle.Danger),
+          new ButtonBuilder()
+            .setCustomId(`competition_replace:no:${selectedGuildId}:${interaction.user.id}`)
+            .setLabel('Cancel')
+            .setStyle(ButtonStyle.Secondary)
+        );
+
         return await interaction.update({
-          content: `❌ **Submission Limit Reached:** You already reached the entry boundary (${currentEntries}/${compConfig.maxSubmissions || 1}) inside **${guild.name}**.`,
-          components: []
+          content: `⚠️ **Submission Limit Reached:** You already reached the entry boundary (1/1) inside **${guild.name}**.\nWould you like to replace your previous submission with this new one?`,
+          components: [replacementButtons]
         });
       }
 
@@ -74,11 +95,16 @@ export default {
 
       if (cachedData.attachmentUrl) submissionEmbed.setImage(cachedData.attachmentUrl);
 
-      await targetChannel.send({ embeds: [submissionEmbed] });
+      // 🔥 Captured the sent message object so we can read its messageId
+      const sentMessage = await targetChannel.send({ embeds: [submissionEmbed] });
 
-      // Save independent tracking metrics to database structure layer
+      // 🔥 Save proper structural metrics to the database layer (Required for the replacement script to work)
       compConfig.submissions = compConfig.submissions || {};
-      compConfig.submissions[interaction.user.id] = currentEntries + 1;
+      compConfig.submissions[interaction.user.id] = {
+        channelId: targetChannel.id,
+        messageId: sentMessage.id,
+        url: cachedData.attachmentUrl || cachedData.content
+      };
 
       const fullConfig = await getGuildConfig(client, selectedGuildId).catch(() => ({}));
       fullConfig.competition = compConfig;
@@ -88,7 +114,7 @@ export default {
       client.tempSubmissions.delete(interaction.user.id);
 
       return await interaction.update({
-        content: `✅ **Submission Locked & Forwarded Successfully to ${guild.name}!** (${currentEntries + 1}/${compConfig.maxSubmissions || 1})`,
+        content: `✅ **Submission Locked & Forwarded Successfully to ${guild.name}!**`,
         components: []
       });
 

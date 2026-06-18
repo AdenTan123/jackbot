@@ -1,3 +1,4 @@
+import { EmbedBuilder } from 'discord.js';
 import { errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { getFromDb, deleteFromDb } from '../../utils/database.js'; // Ensure these match your database.js exports
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
@@ -57,14 +58,25 @@ export default {
           if (oldMsg) await oldMsg.delete().catch(() => null);
         }
 
-        // 2. Send the NEW submission message
+        // 2. Reconstruct the NEW submission embed
+        const submissionEmbed = new EmbedBuilder()
+          .setColor('#00FF66')
+          .setTitle(`📥 Updated Competition Submission | ${guild.name}`)
+          .setAuthor({ name: interaction.user.tag, iconURL: interaction.user.displayAvatarURL({ dynamic: true }) })
+          .setDescription(`**User:** <@${userId}> (${userId})\n\n**Content:**\n${pending.content || '*No text message content provided.*'}`)
+          .setTimestamp();
+
+        // Safely attach the image URL if one exists
+        if (pending.url && pending.url.startsWith('http')) {
+            submissionEmbed.setImage(pending.url);
+        }
+
+        // 3. Send the NEW submission message
         const sent = await ch.send({ 
-            content: `**Updated Submission from <@${userId}>**`,
-            files: pending.url.startsWith('http') ? [pending.url] : [],
-            embeds: [/* You can reconstruct the embed here if you saved it, or just send raw content */]
+            embeds: [submissionEmbed]
         }).catch(err => { throw err; });
 
-        // 3. Update the config with the new message ID and URL
+        // 4. Update the config with the new message ID and URL
         submissions[userId] = { 
             channelId: ch.id, 
             messageId: sent?.id || null, 
@@ -74,7 +86,7 @@ export default {
         comp.submissions = submissions;
         await updateGuildConfig(interaction.client, guildId, { competition: comp }).catch(() => {});
         
-        // 4. Cleanup
+        // 5. Cleanup
         await deleteFromDb(pendingKey);
         await interaction.message.delete().catch(() => {});
         
