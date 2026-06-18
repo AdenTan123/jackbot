@@ -122,9 +122,7 @@ export default {
       return;
     }
 
-    // ==========================================================
-    // 2. SELECT MENUS (ADDED THIS BLOCK FOR YOUR DROPDOWNS)
-    // ==========================================================
+    // 2. SELECT MENUS
     if (interaction.isStringSelectMenu()) {
       const selectMenuHandler = interaction.client.selectMenus?.get(interaction.customId);
       if (!selectMenuHandler) return;
@@ -137,104 +135,122 @@ export default {
       return;
     }
 
-    // 3. MODALS (Shift system)
+    // 3. MODALS
     if (interaction.isModalSubmit()) {
       const [prefix, action, targetId] = interaction.customId.split(':');
-      if (prefix !== 'shiftmodal') return;
-
-      // Stop interaction timing issues immediately during database updates
-      await interaction.deferUpdate().catch(() => {});
-
-      const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
-      cfg.userShifts = cfg.userShifts || {};
-      const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
       
-      const inputMinutes = parseInt(interaction.fields.getTextInputValue('minutes_input'), 10);
-      if (isNaN(inputMinutes) || inputMinutes < 0) {
-        return interaction.followUp({ content: `${EMOJIS.cross} Invalid whole number input.`, flags: ['Ephemeral'] });
+      // 🔥 FIXED: Isolated into a single block so it doesn't return early and break other modals
+      if (prefix === 'shiftmodal') {
+        await interaction.deferUpdate().catch(() => {});
+
+        const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
+        cfg.userShifts = cfg.userShifts || {};
+        const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
+        
+        const inputMinutes = parseInt(interaction.fields.getTextInputValue('minutes_input'), 10);
+        if (isNaN(inputMinutes) || inputMinutes < 0) {
+          return interaction.followUp({ content: `${EMOJIS.cross} Invalid whole number input.`, flags: ['Ephemeral'] });
+        }
+
+        if (action === 'set') shift.duration = inputMinutes;
+        else if (action === 'add') shift.duration += inputMinutes;
+        else if (action === 'dec') shift.duration = Math.max(0, shift.duration - inputMinutes);
+
+        cfg.userShifts[targetId] = shift;
+        await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
+
+        const render = renderUpdatedInterface('admin', targetId, shift);
+        return await interaction.editReply(render);
       }
-
-      if (action === 'set') shift.duration = inputMinutes;
-      else if (action === 'add') shift.duration += inputMinutes;
-      else if (action === 'dec') shift.duration = Math.max(0, shift.duration - inputMinutes);
-
-      cfg.userShifts[targetId] = shift;
-      await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
-
-      const render = renderUpdatedInterface('admin', targetId, shift);
-      return await interaction.editReply(render);
+      return;
     }
 
-    // 4. BUTTONS (Shift system)
+    // 4. BUTTONS
     if (interaction.isButton()) {
-      const [prefix, scope, action, targetId] = interaction.customId.split(':');
-      if (prefix !== 'shift') return;
+      const parts = interaction.customId.split(':');
+      const prefix = parts[0];
 
-      try {
-        if (scope === 'admin' && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
-          return interaction.reply({ content: `${EMOJIS.danger} Admin permissions required.`, flags: ['Ephemeral'] });
-        }
+      // 🛒 SUB-PATH A: SHIFT ENGINE LOGIC
+      if (prefix === 'shift') {
+        const [_, scope, action, targetId] = parts;
 
-        // Action steps: start, pause, end must be deferred up front
-        if (['start', 'pause', 'end'].includes(action)) {
-          await interaction.deferUpdate().catch(() => {});
-          
-          const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
-          cfg.userShifts = cfg.userShifts || {};
-          const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
-
-          const save = async () => {
-            cfg.userShifts[targetId] = shift;
-            await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
-          };
-
-          if (action === 'start') {
-            shift.status = 'Active';
-            shift.startedAt = new Date().toISOString();
-            await save();
-          } else if (action === 'pause') {
-            if (shift.status === 'Active' && shift.startedAt) {
-              const elapsedMs = new Date() - new Date(shift.startedAt);
-              shift.duration += Math.floor(elapsedMs / 60000);
-            }
-            shift.status = 'Paused';
-            shift.startedAt = null;
-            await save();
-          } else if (action === 'end') {
-            if (shift.status === 'Active' && shift.startedAt) {
-              const elapsedMs = new Date() - new Date(shift.startedAt);
-              shift.duration += Math.floor(elapsedMs / 60000);
-            }
-            shift.status = 'Inactive';
-            shift.startedAt = null;
-            await save();
+        try {
+          if (scope === 'admin' && !interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+            return interaction.reply({ content: `${EMOJIS.danger} Admin permissions required.`, flags: ['Ephemeral'] });
           }
 
-          const render = renderUpdatedInterface(scope, targetId, shift);
-          return await interaction.editReply(render);
+          if (['start', 'pause', 'end'].includes(action)) {
+            await interaction.deferUpdate().catch(() => {});
+            
+            const cfg = await getGuildConfig(interaction.client, interaction.guildId).catch(() => ({}));
+            cfg.userShifts = cfg.userShifts || {};
+            const shift = cfg.userShifts[targetId] || { status: 'Inactive', startedAt: null, duration: 0 };
+
+            const save = async () => {
+              cfg.userShifts[targetId] = shift;
+              await updateGuildConfig(interaction.client, interaction.guildId, { userShifts: cfg.userShifts });
+            };
+
+            if (action === 'start') {
+              shift.status = 'Active';
+              shift.startedAt = new Date().toISOString();
+              await save();
+            } else if (action === 'pause') {
+              if (shift.status === 'Active' && shift.startedAt) {
+                const elapsedMs = new Date() - new Date(shift.startedAt);
+                shift.duration += Math.floor(elapsedMs / 60000);
+              }
+              shift.status = 'Paused';
+              shift.startedAt = null;
+              await save();
+            } else if (action === 'end') {
+              if (shift.status === 'Active' && shift.startedAt) {
+                const elapsedMs = new Date() - new Date(shift.startedAt);
+                shift.duration += Math.floor(elapsedMs / 60000);
+              }
+              shift.status = 'Inactive';
+              shift.startedAt = null;
+              await save();
+            }
+
+            const render = renderUpdatedInterface(scope, targetId, shift);
+            return await interaction.editReply(render);
+          }
+
+          if (['set', 'add', 'dec'].includes(action)) {
+            const modalTitles = { set: 'Set Total Time', add: 'Add Time Record', dec: 'Decrease Time Record' };
+            const modalFields = { set: 'Enter exact minutes total:', add: 'Minutes to add:', dec: 'Minutes to subtract:' };
+
+            const modal = new ModalBuilder()
+              .setCustomId(`shiftmodal:${action}:${targetId}`)
+              .setTitle(modalTitles[action]);
+
+            const minutesInput = new TextInputBuilder()
+              .setCustomId('minutes_input')
+              .setLabel(modalFields[action])
+              .setStyle(TextInputStyle.Short)
+              .setPlaceholder('e.g. 15')
+              .setRequired(true);
+
+            modal.addComponents(new ActionRowBuilder().addComponents(minutesInput));
+            return await interaction.showModal(modal);
+          }
+        } catch (error) {
+          console.error('System update framework failed:', error);
         }
+        return;
+      }
 
-        // Modals pass through without deferment
-        if (['set', 'add', 'dec'].includes(action)) {
-          const modalTitles = { set: 'Set Total Time', add: 'Add Time Record', dec: 'Decrease Time Record' };
-          const modalFields = { set: 'Enter exact minutes total:', add: 'Minutes to add:', dec: 'Minutes to subtract:' };
-
-          const modal = new ModalBuilder()
-            .setCustomId(`shiftmodal:${action}:${targetId}`)
-            .setTitle(modalTitles[action]);
-
-          const minutesInput = new TextInputBuilder()
-            .setCustomId('minutes_input')
-            .setLabel(modalFields[action])
-            .setStyle(TextInputStyle.Short)
-            .setPlaceholder('e.g. 15')
-            .setRequired(true);
-
-          modal.addComponents(new ActionRowBuilder().addComponents(minutesInput));
-          return await interaction.showModal(modal);
+      // 🛒 SUB-PATH B: REGISTERED EXTENSION ROUTING (Competition Replace, etc.)
+      // 🔥 FIXED: Splits the customId prefix away from variables and grabs the clean handler file name
+      const dynamicButtonHandler = interaction.client.buttons?.get(prefix);
+      if (dynamicButtonHandler) {
+        try {
+          await dynamicButtonHandler.execute(interaction);
+        } catch (error) {
+          console.error('Dynamic Button Execution Error:', error);
         }
-      } catch (error) {
-        console.error('System update framework failed:', error);
+        return;
       }
     }
   },
