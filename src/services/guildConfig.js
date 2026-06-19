@@ -25,7 +25,6 @@ const GUILD_CONFIG_DEFAULTS = {
         allowMath: true,
         deleteNonWords: false
     },
-   
     competition: {
         active: false,
         eventType: null, // 'attachment', 'link', or 'message'
@@ -33,6 +32,19 @@ const GUILD_CONFIG_DEFAULTS = {
         categoryId: null,
         category: null,
         submissions: {} // Format: { "userId": entryCount }
+    },
+    // ============================================
+    // TICKET SYSTEM CONFIGURATION
+    // ============================================
+    ticketCategoryId: null,           // Category where open tickets are created
+    ticketLogChannelId: null,         // Channel for ticket action logs
+    ticketClosedCategoryId: null,     // Category for closed tickets
+    ticketTranscriptChannelId: null,  // Channel where transcripts are sent
+    ticketStaffRoleId: null,          // Role that can manage tickets
+    maxTicketsPerUser: 3,             // Maximum open tickets per user
+    tickets: {
+        enablePriority: true,         // Enable priority buttons on tickets
+        maxTicketsPerUser: 3,         // Max tickets per user (duplicate for service compatibility)
     }
 };
 

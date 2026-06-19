@@ -215,7 +215,7 @@ export default {
 
       // Load config for other commands
       const guildConfig = await getGuildConfig(client, interaction.guildId);
-      const categoryId = guildConfig.ticketCategoryId;
+      const categoryId = guildConfig.ticketCategoryId || null;
 
       // ═══════════════════════════════════════
       // OPEN TICKET (for self)
