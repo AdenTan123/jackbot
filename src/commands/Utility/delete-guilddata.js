@@ -2,7 +2,7 @@
 console.log('[Command] delete-guilddata.js loaded');
 
 import { SlashCommandBuilder, MessageFlags, EmbedBuilder } from 'discord.js';
-import { PrismaClient } from '@prisma/client';
+// Prisma client not used; removed to avoid missing package
 import { warningEmbed } from '../../utils/embeds.js';
 import { getConfirmationButtons } from '../../utils/components.js';
 import { logger } from '../../utils/logger.js';
