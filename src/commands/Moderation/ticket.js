@@ -11,7 +11,7 @@ import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
-import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
+import { getGuildConfig, updateGuildConfig, getTicketConfig } from '../../services/guildConfig.js';
 import { 
   createTicket, 
   claimTicket, 
@@ -19,6 +19,34 @@ import {
   getUserTicketCount 
 } from '../../services/ticket.js';
 import { checkRateLimit } from '../../utils/rateLimiter.js';
+
+// Helper function to validate ticket channel context
+function isTicketChannel(interaction, categoryId, closedCategoryId = null) {
+  if (!interaction.channel) {
+    logger.warn('Ticket command used outside of a channel', {
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId
+    });
+    return false;
+  }
+  
+  const parentId = interaction.channel.parentId;
+  const isInTicketCategory = categoryId && parentId === categoryId;
+  const isInClosedCategory = closedCategoryId && parentId === closedCategoryId;
+  
+  if (!isInTicketCategory && !isInClosedCategory) {
+    logger.debug('Command used outside ticket category', {
+      channelId: interaction.channel.id,
+      parentId,
+      expectedCategoryId: categoryId,
+      closedCategoryId
+    });
+    return false;
+  }
+  
+  return true;
+}
 
 export default {
   data: new SlashCommandBuilder()
@@ -161,6 +189,14 @@ export default {
 
   async execute(interaction, config, client) {
     const sub = interaction.options.getSubcommand();
+    const startTime = Date.now();
+    
+    logger.info(`[Ticket] Command '/ticket ${sub}' executed by ${interaction.user.tag}`, {
+      userId: interaction.user.id,
+      guildId: interaction.guildId,
+      channelId: interaction.channelId,
+      subcommand: sub
+    });
 
     try {
       // ═══════════════════════════════════════
@@ -174,13 +210,36 @@ export default {
         const staffRole = interaction.options.getRole('staff_role');
         const maxTickets = interaction.options.getInteger('max_tickets');
 
+        // Validate category type
         if (category.type !== ChannelType.GuildCategory) {
+          logger.warn(`[Ticket Setup] Invalid category type: ${category.type}`, {
+            guildId: interaction.guildId,
+            userId: interaction.user.id,
+            channelType: category.type
+          });
+          
           return await interaction.reply({
             embeds: [errorEmbed('Invalid Channel', 'The category must be a category channel.')],
             flags: MessageFlags.Ephemeral
           });
         }
 
+        // Validate optional channels
+        if (logChannel && logChannel.type !== ChannelType.GuildText) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Invalid Channel', 'The log channel must be a text channel.')],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        if (transcriptChannel && transcriptChannel.type !== ChannelType.GuildText) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Invalid Channel', 'The transcript channel must be a text channel.')],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        // Build update data
         const updateData = {
           ticketCategoryId: category.id,
         };
@@ -191,8 +250,33 @@ export default {
         if (staffRole) updateData.ticketStaffRoleId = staffRole.id;
         if (maxTickets) updateData.maxTicketsPerUser = maxTickets;
 
-        await updateGuildConfig(client, interaction.guildId, updateData);
+        logger.info(`[Ticket Setup] Saving config for guild ${interaction.guildId}`, {
+          updateData,
+          userId: interaction.user.id
+        });
 
+        // Save config with error handling
+        try {
+          await updateGuildConfig(client, interaction.guildId, updateData);
+          
+          logger.info(`[Ticket Setup] Config saved successfully for guild ${interaction.guildId}`, {
+            ticketCategoryId: category.id,
+            executionTime: Date.now() - startTime
+          });
+        } catch (saveError) {
+          logger.error(`[Ticket Setup] Failed to save config for guild ${interaction.guildId}`, {
+            error: saveError.message,
+            stack: saveError.stack,
+            updateData
+          });
+          
+          return await interaction.reply({
+            embeds: [errorEmbed('Setup Failed', 'Failed to save configuration. Please try again or contact support.')],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        // Build success response
         const fields = [
           { name: '📁 Open Category', value: category.name, inline: true }
         ];
@@ -205,6 +289,7 @@ export default {
         return await interaction.reply({
           embeds: [createEmbed({
             title: '✅ Ticket System Configured',
+            description: 'The ticket system is now ready to use!\n\n**Available Commands:**\n• `/ticket open` - Create your own ticket\n• `/ticket create` - Create a ticket for someone else\n• `/ticket strike` - Create a strike ticket',
             color: 'success',
             fields,
             timestamp: true,
@@ -213,62 +298,160 @@ export default {
         });
       }
 
-      // Load config for other commands
-      const guildConfig = await getGuildConfig(client, interaction.guildId);
+      // ═══════════════════════════════════════
+      // LOAD CONFIG FOR OTHER COMMANDS
+      // ═══════════════════════════════════════
+      logger.debug(`[Ticket] Loading config for guild ${interaction.guildId}`);
+      
+      let guildConfig;
+      try {
+        guildConfig = await getGuildConfig(client, interaction.guildId);
+        
+        if (!guildConfig) {
+          logger.warn(`[Ticket] No config returned for guild ${interaction.guildId}`);
+          guildConfig = {};
+        }
+      } catch (configError) {
+        logger.error(`[Ticket] Failed to load guild config`, {
+          guildId: interaction.guildId,
+          error: configError.message,
+          stack: configError.stack
+        });
+        
+        // Don't fail completely - use empty config
+        guildConfig = {};
+      }
+      
       const categoryId = guildConfig.ticketCategoryId || null;
+      const closedCategoryId = guildConfig.ticketClosedCategoryId || null;
+      
+      logger.debug(`[Ticket] Config loaded for guild ${interaction.guildId}`, {
+        categoryId,
+        closedCategoryId,
+        hasCategoryId: !!categoryId,
+        configKeys: Object.keys(guildConfig)
+      });
 
       // ═══════════════════════════════════════
       // OPEN TICKET (for self)
       // ═══════════════════════════════════════
       if (sub === 'open') {
         if (!categoryId) {
+          logger.warn(`[Ticket Open] Ticket system not configured for guild ${interaction.guildId}`, {
+            userId: interaction.user.id
+          });
+          
           return await interaction.reply({
-            embeds: [errorEmbed('Not Set Up', 'Run `/ticket setup` first.')],
+            embeds: [errorEmbed(
+              'Not Set Up', 
+              'The ticket system has not been configured yet.\n\nAn admin needs to run `/ticket setup` first.'
+            )],
             flags: MessageFlags.Ephemeral
           });
         }
 
         // Rate limiting
         const rateLimitKey = `${interaction.user.id}:create_ticket`;
-        const allowed = await checkRateLimit(rateLimitKey, 3, 60000);
-        if (!allowed) {
-          return await interaction.reply({
-            embeds: [errorEmbed('Rate Limited', 'You are creating tickets too quickly. Please wait a minute.')],
-            flags: MessageFlags.Ephemeral
+        try {
+          const allowed = await checkRateLimit(rateLimitKey, 3, 60000);
+          if (!allowed) {
+            logger.warn(`[Ticket Open] Rate limit hit for user ${interaction.user.tag}`, {
+              userId: interaction.user.id,
+              guildId: interaction.guildId
+            });
+            
+            return await interaction.reply({
+              embeds: [errorEmbed('Rate Limited', 'You are creating tickets too quickly. Please wait a minute.')],
+              flags: MessageFlags.Ephemeral
+            });
+          }
+        } catch (rateLimitError) {
+          logger.error(`[Ticket Open] Rate limit check failed`, {
+            error: rateLimitError.message,
+            userId: interaction.user.id
           });
+          // Continue anyway - rate limiting is non-critical
         }
 
         // Check ticket limit
         const maxTickets = guildConfig.maxTicketsPerUser || 3;
-        const currentCount = await getUserTicketCount(interaction.guildId, interaction.user.id);
-        if (currentCount >= maxTickets) {
-          return await interaction.reply({
-            embeds: [errorEmbed(
-              'Ticket Limit Reached',
-              `You have ${currentCount}/${maxTickets} open tickets. Close existing tickets first.`
-            )],
-            flags: MessageFlags.Ephemeral
+        let currentCount = 0;
+        try {
+          currentCount = await getUserTicketCount(interaction.guildId, interaction.user.id);
+          
+          if (currentCount >= maxTickets) {
+            logger.info(`[Ticket Open] User ${interaction.user.tag} at ticket limit`, {
+              userId: interaction.user.id,
+              currentCount,
+              maxTickets
+            });
+            
+            return await interaction.reply({
+              embeds: [errorEmbed(
+                'Ticket Limit Reached',
+                `You have ${currentCount}/${maxTickets} open tickets.\n\nPlease close your existing tickets before creating a new one.`
+              )],
+              flags: MessageFlags.Ephemeral
+            });
+          }
+        } catch (countError) {
+          logger.error(`[Ticket Open] Failed to check ticket count`, {
+            error: countError.message,
+            userId: interaction.user.id
           });
+          // Continue anyway - ticket count check is non-critical
         }
 
         const reason = interaction.options.getString('reason') || 'No reason provided';
         const priority = interaction.options.getString('priority') || 'none';
 
-        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
-
-        const result = await createTicket(
-          interaction.guild,
-          interaction.member,
-          categoryId,
+        logger.info(`[Ticket Open] Creating ticket for ${interaction.user.tag}`, {
+          userId: interaction.user.id,
+          guildId: interaction.guildId,
           reason,
           priority
-        );
+        });
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        let result;
+        try {
+          result = await createTicket(
+            interaction.guild,
+            interaction.member,
+            categoryId,
+            reason,
+            priority
+          );
+        } catch (createError) {
+          logger.error(`[Ticket Open] Failed to create ticket`, {
+            error: createError.message,
+            stack: createError.stack,
+            userId: interaction.user.id,
+            guildId: interaction.guildId
+          });
+          
+          return await interaction.editReply({
+            embeds: [errorEmbed('Error', 'Failed to create ticket. Please try again later.')],
+          });
+        }
 
         if (result.success) {
+          logger.info(`[Ticket Open] Ticket created successfully`, {
+            userId: interaction.user.id,
+            channelId: result.channel?.id,
+            executionTime: Date.now() - startTime
+          });
+          
           await interaction.editReply({
             embeds: [successEmbed('Ticket Created', `Your ticket has been created in ${result.channel}!`)],
           });
         } else {
+          logger.warn(`[Ticket Open] Ticket creation returned failure`, {
+            userId: interaction.user.id,
+            error: result.error
+          });
+          
           await interaction.editReply({
             embeds: [errorEmbed('Error', result.error || 'Failed to create ticket.')],
           });
@@ -299,19 +482,36 @@ export default {
           });
         }
 
+        logger.info(`[Ticket Create] Staff creating ticket`, {
+          staffUserId: interaction.user.id,
+          targetUser: user?.id,
+          targetRole: role?.id,
+          creator: creator.id,
+          reason,
+          priority
+        });
+
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        // If creating for a user, check their ticket limit
+        // Check ticket limit for target user
         if (user) {
-          const maxTickets = guildConfig.maxTicketsPerUser || 3;
-          const currentCount = await getUserTicketCount(interaction.guildId, user.id);
-          if (currentCount >= maxTickets) {
-            return await interaction.editReply({
-              embeds: [errorEmbed(
-                'Ticket Limit Reached',
-                `${user} has ${currentCount}/${maxTickets} open tickets.`
-              )],
+          try {
+            const maxTickets = guildConfig.maxTicketsPerUser || 3;
+            const currentCount = await getUserTicketCount(interaction.guildId, user.id);
+            if (currentCount >= maxTickets) {
+              return await interaction.editReply({
+                embeds: [errorEmbed(
+                  'Ticket Limit Reached',
+                  `${user} has ${currentCount}/${maxTickets} open tickets.`
+                )],
+              });
+            }
+          } catch (countError) {
+            logger.error(`[Ticket Create] Failed to check target user ticket count`, {
+              error: countError.message,
+              targetUserId: user.id
             });
+            // Continue anyway
           }
         }
 
@@ -339,16 +539,28 @@ export default {
           fullReason = `Role ticket for ${role.name}\nCreated by: ${interaction.user.tag}\nReason: ${reason}`;
         }
 
-        const result = await createTicket(
-          interaction.guild,
-          targetMember,
-          categoryId,
-          fullReason,
-          priority
-        );
+        let result;
+        try {
+          result = await createTicket(
+            interaction.guild,
+            targetMember,
+            categoryId,
+            fullReason,
+            priority
+          );
+        } catch (createError) {
+          logger.error(`[Ticket Create] Failed to create ticket`, {
+            error: createError.message,
+            stack: createError.stack
+          });
+          
+          return await interaction.editReply({
+            embeds: [errorEmbed('Error', 'Failed to create ticket. Please try again later.')],
+          });
+        }
 
         if (result.success) {
-          // Add the role to the ticket if specified
+          // Add role permissions if specified
           if (role) {
             try {
               await result.channel.permissionOverwrites.create(role, {
@@ -357,12 +569,16 @@ export default {
                 ReadMessageHistory: true,
                 AttachFiles: true,
               });
+              logger.debug(`[Ticket Create] Added role ${role.name} to ticket ${result.channel.id}`);
             } catch (permError) {
-              logger.warn(`Could not add role ${role.name} to ticket: ${permError.message}`);
+              logger.warn(`[Ticket Create] Could not add role ${role.name} to ticket`, {
+                error: permError.message,
+                channelId: result.channel.id
+              });
             }
           }
 
-          // Add the creator (staff member) to the ticket if different from target
+          // Add the creator (staff member) if different from target
           if (user && creator.id !== user.id) {
             try {
               await result.channel.permissionOverwrites.create(creator, {
@@ -371,12 +587,16 @@ export default {
                 ReadMessageHistory: true,
                 AttachFiles: true,
               });
+              logger.debug(`[Ticket Create] Added creator ${creator.tag} to ticket ${result.channel.id}`);
             } catch (permError) {
-              logger.warn(`Could not add creator ${creator.tag} to ticket: ${permError.message}`);
+              logger.warn(`[Ticket Create] Could not add creator ${creator.tag} to ticket`, {
+                error: permError.message,
+                channelId: result.channel.id
+              });
             }
           }
 
-          // Send a custom message in the ticket
+          // Send info message in ticket
           const ticketInfoEmbed = createEmbed({
             title: '🎫 Ticket Created',
             description: `This ticket was created by ${interaction.user} for ${user || role}.`,
@@ -392,10 +612,21 @@ export default {
 
           await result.channel.send({ embeds: [ticketInfoEmbed] });
 
+          logger.info(`[Ticket Create] Ticket created successfully`, {
+            channelId: result.channel.id,
+            targetUser: user?.id,
+            targetRole: role?.id,
+            executionTime: Date.now() - startTime
+          });
+
           await interaction.editReply({
             embeds: [successEmbed('Ticket Created', `Ticket created in ${result.channel}!`)],
           });
         } else {
+          logger.warn(`[Ticket Create] Creation returned failure`, {
+            error: result.error
+          });
+          
           await interaction.editReply({
             embeds: [errorEmbed('Error', result.error || 'Failed to create ticket.')],
           });
@@ -417,9 +648,15 @@ export default {
         const reason = interaction.options.getString('reason');
         const creator = interaction.options.getUser('creator') || interaction.user;
 
+        logger.info(`[Ticket Strike] Creating strike ticket`, {
+          staffUserId: interaction.user.id,
+          targetUser: user.id,
+          officer: creator.id,
+          reason
+        });
+
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        // Get the target user as a GuildMember
         const targetMember = await interaction.guild.members.fetch(user.id).catch(() => null);
         if (!targetMember) {
           return await interaction.editReply({
@@ -429,16 +666,28 @@ export default {
 
         const strikeReason = `⚠️ STRIKE ISSUED\n👤 User: ${user.tag}\n🛡️ Officer: ${creator.tag}\n📝 Reason: ${reason}`;
         
-        const result = await createTicket(
-          interaction.guild,
-          targetMember,
-          categoryId,
-          strikeReason,
-          'high' // Strikes default to high priority
-        );
+        let result;
+        try {
+          result = await createTicket(
+            interaction.guild,
+            targetMember,
+            categoryId,
+            strikeReason,
+            'high'
+          );
+        } catch (createError) {
+          logger.error(`[Ticket Strike] Failed to create strike ticket`, {
+            error: createError.message,
+            stack: createError.stack
+          });
+          
+          return await interaction.editReply({
+            embeds: [errorEmbed('Error', 'Failed to create strike ticket.')],
+          });
+        }
 
         if (result.success) {
-          // Add the creator (officer) to the ticket
+          // Add the officer to the ticket
           if (creator.id !== user.id) {
             try {
               await result.channel.permissionOverwrites.create(creator, {
@@ -448,11 +697,14 @@ export default {
                 AttachFiles: true,
               });
             } catch (permError) {
-              logger.warn(`Could not add officer ${creator.tag} to strike ticket: ${permError.message}`);
+              logger.warn(`[Ticket Strike] Could not add officer to ticket`, {
+                error: permError.message,
+                officerId: creator.id
+              });
             }
           }
 
-          // Send the strike notification in the ticket
+          // Send strike notification
           const strikeEmbed = createEmbed({
             title: '⚡ Infraction Strike Logged',
             description: `An official strike has been recorded for ${user}.`,
@@ -468,6 +720,13 @@ export default {
           await result.channel.send({
             content: `${user}`,
             embeds: [strikeEmbed],
+          });
+
+          logger.info(`[Ticket Strike] Strike ticket created successfully`, {
+            channelId: result.channel.id,
+            targetUser: user.id,
+            officer: creator.id,
+            executionTime: Date.now() - startTime
           });
 
           await interaction.editReply({
@@ -486,16 +745,18 @@ export default {
       else if (sub === 'bring') {
         const targetUser = interaction.options.getUser('user');
 
-        if (!categoryId || interaction.channel.parentId !== categoryId) {
-          // Also check closed category if configured
-          const closedCategoryId = guildConfig.ticketClosedCategoryId;
-          if (!closedCategoryId || interaction.channel.parentId !== closedCategoryId) {
-            return await interaction.reply({
-              embeds: [errorEmbed('Invalid Channel', 'This command can only be used inside a ticket channel.')],
-              flags: MessageFlags.Ephemeral
-            });
-          }
+        if (!isTicketChannel(interaction, categoryId, closedCategoryId)) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Invalid Channel', 'This command can only be used inside a ticket channel.')],
+            flags: MessageFlags.Ephemeral
+          });
         }
+
+        logger.info(`[Ticket Bring] Adding user to ticket`, {
+          channelId: interaction.channel.id,
+          targetUser: targetUser.id,
+          staffUser: interaction.user.id
+        });
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -507,7 +768,6 @@ export default {
             AttachFiles: true,
           });
         } catch (permError) {
-          // If overwrite exists, edit it
           try {
             await interaction.channel.permissionOverwrites.edit(targetUser, {
               ViewChannel: true,
@@ -516,6 +776,12 @@ export default {
               AttachFiles: true,
             });
           } catch (editError) {
+            logger.error(`[Ticket Bring] Failed to add user permissions`, {
+              error: editError.message,
+              channelId: interaction.channel.id,
+              targetUser: targetUser.id
+            });
+            
             return await interaction.editReply({
               embeds: [errorEmbed('Error', 'Failed to add user to ticket.')],
             });
@@ -543,15 +809,18 @@ export default {
       else if (sub === 'remove') {
         const targetUser = interaction.options.getUser('user');
 
-        if (!categoryId || interaction.channel.parentId !== categoryId) {
-          const closedCategoryId = guildConfig.ticketClosedCategoryId;
-          if (!closedCategoryId || interaction.channel.parentId !== closedCategoryId) {
-            return await interaction.reply({
-              embeds: [errorEmbed('Invalid Channel', 'This command can only be used inside a ticket channel.')],
-              flags: MessageFlags.Ephemeral
-            });
-          }
+        if (!isTicketChannel(interaction, categoryId, closedCategoryId)) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Invalid Channel', 'This command can only be used inside a ticket channel.')],
+            flags: MessageFlags.Ephemeral
+          });
         }
+
+        logger.info(`[Ticket Remove] Removing user from ticket`, {
+          channelId: interaction.channel.id,
+          targetUser: targetUser.id,
+          staffUser: interaction.user.id
+        });
 
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
@@ -565,7 +834,6 @@ export default {
             EmbedLinks: false,
           });
         } catch (permError) {
-          // If overwrite doesn't exist, create it with deny
           try {
             await interaction.channel.permissionOverwrites.create(targetUser, {
               ViewChannel: false,
@@ -576,6 +844,12 @@ export default {
               EmbedLinks: false,
             });
           } catch (createError) {
+            logger.error(`[Ticket Remove] Failed to remove user permissions`, {
+              error: createError.message,
+              channelId: interaction.channel.id,
+              targetUser: targetUser.id
+            });
+            
             return await interaction.editReply({
               embeds: [errorEmbed('Error', 'Failed to remove user from ticket.')],
             });
@@ -600,9 +874,33 @@ export default {
       // CLAIM TICKET
       // ═══════════════════════════════════════
       else if (sub === 'claim') {
+        if (!isTicketChannel(interaction, categoryId, closedCategoryId)) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Invalid Channel', 'This command can only be used inside a ticket channel.')],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        logger.info(`[Ticket Claim] Claiming ticket`, {
+          channelId: interaction.channel.id,
+          userId: interaction.user.id
+        });
+
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         
-        const result = await claimTicket(interaction.channel, interaction.user);
+        let result;
+        try {
+          result = await claimTicket(interaction.channel, interaction.user);
+        } catch (claimError) {
+          logger.error(`[Ticket Claim] Failed to claim ticket`, {
+            error: claimError.message,
+            channelId: interaction.channel.id
+          });
+          
+          return await interaction.editReply({
+            embeds: [errorEmbed('Error', 'Failed to claim ticket.')],
+          });
+        }
         
         if (result.success) {
           await interaction.editReply({
@@ -619,11 +917,37 @@ export default {
       // PRIORITY
       // ═══════════════════════════════════════
       else if (sub === 'priority') {
+        if (!isTicketChannel(interaction, categoryId, closedCategoryId)) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Invalid Channel', 'This command can only be used inside a ticket channel.')],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
         const priority = interaction.options.getString('level');
         
+        logger.info(`[Ticket Priority] Changing priority`, {
+          channelId: interaction.channel.id,
+          userId: interaction.user.id,
+          priority
+        });
+
         await interaction.deferReply({ flags: MessageFlags.Ephemeral });
         
-        const result = await updateTicketPriority(interaction.channel, priority, interaction.user);
+        let result;
+        try {
+          result = await updateTicketPriority(interaction.channel, priority, interaction.user);
+        } catch (priorityError) {
+          logger.error(`[Ticket Priority] Failed to update priority`, {
+            error: priorityError.message,
+            channelId: interaction.channel.id,
+            priority
+          });
+          
+          return await interaction.editReply({
+            embeds: [errorEmbed('Error', 'Failed to update priority.')],
+          });
+        }
         
         if (result.success) {
           await interaction.editReply({
@@ -636,9 +960,28 @@ export default {
         }
       }
 
+      // Log command completion
+      logger.info(`[Ticket] Command '/ticket ${sub}' completed`, {
+        userId: interaction.user.id,
+        guildId: interaction.guildId,
+        executionTime: Date.now() - startTime
+      });
+
     } catch (error) {
-      logger.error('Ticket command error:', error);
-      await handleInteractionError(interaction, error, { subtype: `ticket_${sub}_failed` });
+      logger.error(`[Ticket] Unhandled error in '/ticket ${sub}'`, {
+        error: error.message,
+        stack: error.stack,
+        userId: interaction.user.id,
+        guildId: interaction.guildId,
+        subcommand: sub,
+        executionTime: Date.now() - startTime
+      });
+      
+      await handleInteractionError(interaction, error, { 
+        subtype: `ticket_${sub}_failed`,
+        guildId: interaction.guildId,
+        userId: interaction.user.id
+      });
     }
   },
 };
