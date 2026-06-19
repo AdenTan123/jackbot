@@ -1,508 +1,411 @@
-import { SlashCommandBuilder, PermissionFlagsBits, ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, AttachmentBuilder } from 'discord.js';
+import { 
+  SlashCommandBuilder, 
+  PermissionFlagsBits, 
+  ChannelType, 
+  ActionRowBuilder, 
+  ButtonBuilder, 
+  ButtonStyle, 
+  MessageFlags 
+} from 'discord.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
 import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
-
-async function getTicketConfig(client, guildId) {
-  const cfg = await getGuildConfig(client, guildId).catch(() => ({}));
-  return {
-    categoryId: cfg?.ticketCategoryId ?? null,
-    logChannelId: cfg?.ticketLogChannelId ?? null,
-    strikeMessageTemplate: cfg?.strikeMessageTemplate ?? null
-  };
-}
-
-async function generateTranscript(channel) {
-  try {
-    let allMessages = [];
-    let lastId = null;
-
-    while (true) {
-      const options = { limit: 100 };
-      if (lastId) options.before = lastId;
-      const messages = await channel.messages.fetch(options);
-      if (!messages.size) break;
-      allMessages = allMessages.concat([...messages.values()]);
-      lastId = messages.last()?.id;
-      if (messages.size < 100) break;
-    }
-
-    allMessages.reverse();
-
-    const lines = [
-      `═══════════════════════════════════════`,
-      `  TICKET TRANSCRIPT — #${channel.name}`,
-      `  Category: ${channel.parent?.name ?? 'Unknown'}`,
-      `  Created: ${channel.createdAt?.toUTCString() ?? 'Unknown'}`,
-      `  Exported: ${new Date().toUTCString()}`,
-      `  Total Messages: ${allMessages.length}`,
-      `═══════════════════════════════════════`,
-      '',
-    ];
-
-    for (const msg of allMessages) {
-      const time = msg.createdAt.toUTCString();
-      const author = `${msg.author.tag} (${msg.author.id})`;
-      lines.push(`[${time}] ${author}`);
-      if (msg.content) lines.push(`  ${msg.content}`);
-      if (msg.embeds.length) {
-        for (const embed of msg.embeds) {
-          if (embed.title) lines.push(`  [Embed] ${embed.title}`);
-          if (embed.description) lines.push(`  ${embed.description}`);
-          for (const field of embed.fields ?? []) {
-            lines.push(`  ${field.name}: ${field.value}`);
-          }
-        }
-      }
-      if (msg.attachments.size) {
-        for (const att of msg.attachments.values()) {
-          lines.push(`  [Attachment] ${att.name}: ${att.url}`);
-        }
-      }
-      lines.push('');
-    }
-
-    return lines.join('\n');
-  } catch (error) {
-    logger.error('Failed to generate transcript:', error);
-    return `Failed to generate transcript: ${error.message}`;
-  }
-}
-
-async function logToChannel(guild, logChannelId, embed, file = null) {
-  if (!logChannelId) return;
-  try {
-    const logChannel = guild.channels.cache.get(logChannelId);
-    if (!logChannel) {
-      logger.warn(`Log channel ${logChannelId} not found in guild ${guild.id}`);
-      return;
-    }
-    const payload = { embeds: [embed] };
-    if (file) payload.files = [file];
-    await logChannel.send(payload);
-  } catch (error) {
-    logger.error('Failed to log ticket action:', error);
-  }
-}
+import { 
+  createTicket, 
+  closeTicket, 
+  claimTicket, 
+  updateTicketPriority, 
+  getUserTicketCount 
+} from '../../services/ticket.js';
+import { checkRateLimit } from '../../utils/rateLimiter.js';
 
 export default {
   data: new SlashCommandBuilder()
     .setName('ticket')
-    .setDescription('Ticket management')
+    .setDescription('Ticket management system')
+    // Setup command
     .addSubcommand(sub => sub
       .setName('setup')
       .setDescription('Configure ticket settings for this server')
-      .addChannelOption(o => o.setName('category').setDescription('Category to create tickets under').setRequired(true))
-      .addChannelOption(o => o.setName('log_channel').setDescription('Channel to log ticket actions').setRequired(true)))
+      .addChannelOption(o => o
+        .setName('category')
+        .setDescription('Category to create tickets under')
+        .setRequired(true))
+      .addChannelOption(o => o
+        .setName('log_channel')
+        .setDescription('Channel to log ticket actions')
+        .setRequired(false))
+      .addChannelOption(o => o
+        .setName('closed_category')
+        .setDescription('Category for closed tickets')
+        .setRequired(false))
+      .addChannelOption(o => o
+        .setName('transcript_channel')
+        .setDescription('Channel to send transcripts when tickets are deleted')
+        .setRequired(false))
+      .addRoleOption(o => o
+        .setName('staff_role')
+        .setDescription('Role that can manage tickets')
+        .setRequired(false))
+      .addIntegerOption(o => o
+        .setName('max_tickets')
+        .setDescription('Maximum open tickets per user (default: 3)')
+        .setRequired(false)
+        .setMinValue(1)
+        .setMaxValue(10)))
+    // Create ticket
     .addSubcommand(sub => sub
       .setName('create')
-      .setDescription('Create a ticket for a user or role')
-      .addUserOption(o => o.setName('user').setDescription('User to add to the ticket').setRequired(false))
-      .addRoleOption(o => o.setName('role').setDescription('Role to add to the ticket (adds all role members)').setRequired(false))
-      .addUserOption(o => o.setName('creator').setDescription('Person assigned to the ticket').setRequired(false))
-      .addStringOption(o => o.setName('reason').setDescription('Reason for the ticket').setRequired(false)))
+      .setDescription('Create a new ticket')
+      .addStringOption(o => o
+        .setName('reason')
+        .setDescription('Reason for the ticket')
+        .setRequired(false))
+      .addStringOption(o => o
+        .setName('priority')
+        .setDescription('Ticket priority')
+        .setRequired(false)
+        .addChoices(
+          { name: 'None', value: 'none' },
+          { name: 'Low', value: 'low' },
+          { name: 'Medium', value: 'medium' },
+          { name: 'High', value: 'high' },
+          { name: 'Urgent', value: 'urgent' }
+        )))
+    // Create ticket for another user (staff only)
+    .addSubcommand(sub => sub
+      .setName('createfor')
+      .setDescription('Create a ticket for another user (Staff only)')
+      .addUserOption(o => o
+        .setName('user')
+        .setDescription('User to create ticket for')
+        .setRequired(true))
+      .addStringOption(o => o
+        .setName('reason')
+        .setDescription('Reason for the ticket')
+        .setRequired(false))
+      .addStringOption(o => o
+        .setName('priority')
+        .setDescription('Ticket priority')
+        .setRequired(false)
+        .addChoices(
+          { name: 'None', value: 'none' },
+          { name: 'Low', value: 'low' },
+          { name: 'Medium', value: 'medium' },
+          { name: 'High', value: 'high' },
+          { name: 'Urgent', value: 'urgent' }
+        )))
+    // Strike ticket
     .addSubcommand(sub => sub
       .setName('strike')
-      .setDescription('Create an official documentation ticket for tracking a user strike infraction')
-      .addUserOption(o => o.setName('user').setDescription('The user receiving this dynamic strike recording').setRequired(true))
-      .addStringOption(o => o.setName('reason').setDescription('Infraction detailing causing the strike penalty').setRequired(true))
-      .addUserOption(o => o.setName('creator').setDescription('Staff executor issuing this strike action').setRequired(false)))
+      .setDescription('Create a strike infraction ticket')
+      .addUserOption(o => o
+        .setName('user')
+        .setDescription('The user receiving this strike')
+        .setRequired(true))
+      .addStringOption(o => o
+        .setName('reason')
+        .setDescription('Reason for the strike')
+        .setRequired(true)))
+    // Claim ticket
     .addSubcommand(sub => sub
-      .setName('bring')
-      .setDescription('Add a user to this ticket')
-      .addUserOption(o => o.setName('user').setDescription('User to add').setRequired(true)))
+      .setName('claim')
+      .setDescription('Claim this ticket'))
+    // Priority
     .addSubcommand(sub => sub
-      .setName('remove')
-      .setDescription('Remove a user from this ticket')
-      .addUserOption(o => o.setName('user').setDescription('User to remove').setRequired(true)))
-    .addSubcommand(sub => sub
-      .setName('delete')
-      .setDescription('Delete this ticket channel'))
+      .setName('priority')
+      .setDescription('Set ticket priority')
+      .addStringOption(o => o
+        .setName('level')
+        .setDescription('Priority level')
+        .setRequired(true)
+        .addChoices(
+          { name: 'None', value: 'none' },
+          { name: 'Low', value: 'low' },
+          { name: 'Medium', value: 'medium' },
+          { name: 'High', value: 'high' },
+          { name: 'Urgent', value: 'urgent' }
+        )))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
 
   category: 'moderation',
 
   async execute(interaction, config, client) {
-    const deferSuccess = await InteractionHelper.safeDefer(interaction);
-    if (!deferSuccess) return;
-
     const sub = interaction.options.getSubcommand();
 
     try {
-
-      // ═══════════════════════════════════════════════════════════
+      // ═══════════════════════════════════════
       // SETUP
-      // ═══════════════════════════════════════════════════════════
+      // ═══════════════════════════════════════
       if (sub === 'setup') {
         const category = interaction.options.getChannel('category');
         const logChannel = interaction.options.getChannel('log_channel');
+        const closedCategory = interaction.options.getChannel('closed_category');
+        const transcriptChannel = interaction.options.getChannel('transcript_channel');
+        const staffRole = interaction.options.getRole('staff_role');
+        const maxTickets = interaction.options.getInteger('max_tickets');
 
         if (category.type !== ChannelType.GuildCategory) {
-          throw new Error('The category option must be a category channel, not a text channel.');
+          return await interaction.reply({
+            embeds: [errorEmbed('Invalid Channel', 'The category must be a category channel.')],
+            flags: MessageFlags.Ephemeral
+          });
         }
 
-        await updateGuildConfig(client, interaction.guildId, {
+        const updateData = {
           ticketCategoryId: category.id,
-          ticketLogChannelId: logChannel.id,
-        });
+        };
 
-        return InteractionHelper.safeEditReply(interaction, {
+        if (logChannel) updateData.ticketLogChannelId = logChannel.id;
+        if (closedCategory) updateData.ticketClosedCategoryId = closedCategory.id;
+        if (transcriptChannel) updateData.ticketTranscriptChannelId = transcriptChannel.id;
+        if (staffRole) updateData.ticketStaffRoleId = staffRole.id;
+        if (maxTickets) updateData.maxTicketsPerUser = maxTickets;
+
+        await updateGuildConfig(client, interaction.guildId, updateData);
+
+        const fields = [
+          { name: '📁 Open Category', value: category.name, inline: true }
+        ];
+        if (logChannel) fields.push({ name: '📋 Log Channel', value: `<#${logChannel.id}>`, inline: true });
+        if (closedCategory) fields.push({ name: '🔒 Closed Category', value: closedCategory.name, inline: true });
+        if (transcriptChannel) fields.push({ name: '📜 Transcript Channel', value: `<#${transcriptChannel.id}>`, inline: true });
+        if (staffRole) fields.push({ name: '👥 Staff Role', value: `<@&${staffRole.id}>`, inline: true });
+        if (maxTickets) fields.push({ name: '🎫 Max Tickets/User', value: String(maxTickets), inline: true });
+
+        return await interaction.reply({
           embeds: [createEmbed({
             title: '✅ Ticket System Configured',
             color: 'success',
-            fields: [
-              { name: '📁 Category', value: category.name, inline: true },
-              { name: '📋 Log Channel', value: `<#${logChannel.id}>`, inline: true },
-            ],
-            footer: { text: 'You can now use /ticket create or /ticket strike' },
+            fields,
             timestamp: true,
           })],
+          flags: MessageFlags.Ephemeral
         });
       }
 
-      // Load per-guild config values
-      const { categoryId, logChannelId, strikeMessageTemplate } = await getTicketConfig(client, interaction.guildId);
+      // Load config for other commands
+      const guildConfig = await getGuildConfig(client, interaction.guildId);
+      const categoryId = guildConfig.ticketCategoryId;
 
-      // ═══════════════════════════════════════════════════════════
-      // STRIKE COMMAND
-      // ═══════════════════════════════════════════════════════════
-      if (sub === 'strike') {
+      // ═══════════════════════════════════════
+      // CREATE TICKET
+      // ═══════════════════════════════════════
+      if (sub === 'create') {
         if (!categoryId) {
-          throw new Error('Tickets are not set up yet. Run `/ticket setup` first.');
+          return await interaction.reply({
+            embeds: [errorEmbed('Not Set Up', 'Run `/ticket setup` first.')],
+            flags: MessageFlags.Ephemeral
+          });
         }
 
-        const user = interaction.options.getUser('user', true);
-        const reason = interaction.options.getString('reason', true);
-        const creator = interaction.options.getUser('creator') || interaction.user;
-
-        const category = interaction.guild.channels.cache.get(categoryId);
-        if (!category) {
-          throw new Error('Ticket category not found. Please run `/ticket setup` again.');
+        // Rate limiting
+        const rateLimitKey = `${interaction.user.id}:create_ticket`;
+        const allowed = await checkRateLimit(rateLimitKey, 3, 60000);
+        if (!allowed) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Rate Limited', 'You are creating tickets too quickly. Please wait a minute.')],
+            flags: MessageFlags.Ephemeral
+          });
         }
 
-        // Distinct styling specifically tracking structural records
-        const ticketName = `strike-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`;
-
-        const overwrites = [
-          { id: interaction.guild.roles.everyone.id, deny: [PermissionFlagsBits.ViewChannel] },
-          { id: creator.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-          { id: user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory] },
-          { id: client.user.id, allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels] },
-        ];
-
-        const ticketChannel = await interaction.guild.channels.create({
-          name: ticketName,
-          type: ChannelType.GuildText,
-          parent: categoryId,
-          permissionOverwrites: overwrites,
-        });
-
-        const panelEmbed = createEmbed({
-          title: '⚡ Infraction Strike Logged',
-          description: `An official tracking ticket channel has been initialized regarding user behavior records.`,
-          color: 'error',
-          fields: [
-            { name: '👤 Targeted User', value: `<@${user.id}>`, inline: true },
-            { name: '🛡️ Issuing Officer', value: `<@${creator.id}>`, inline: true },
-          ],
-          timestamp: true,
-        });
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`ticket_close:${creator.id}`)
-            .setLabel('🔒 Close Ticket')
-            .setStyle(ButtonStyle.Danger)
-        );
-
-        // Core compilation handling layout variable injection cleanly
-        const baseTemplate = strikeMessageTemplate || "⚠️ **STRIKE ISSUED**\n\n👤 **User:** {user}\n🛡️ **Staff:** {creator}\n📝 **Reason:** {reason}";
-        const processedMessage = baseTemplate
-          .replace(/{user}/g, `<@${user.id}>`)
-          .replace(/{creator}/g, `<@${creator.id}>`)
-          .replace(/{reason}/g, reason);
-
-        // Dispatches the notification dashboard cleanly
-        await ticketChannel.send({
-          content: `<@${user.id}>`,
-          embeds: [panelEmbed],
-          components: [row]
-        });
-
-        // Appends the completely updated custom message configuration
-        await ticketChannel.send({ content: processedMessage });
-
-        await logToChannel(interaction.guild, logChannelId, createEmbed({
-          title: '⚡ Strike Ticket Log Entry',
-          color: 'error',
-          fields: [
-            { name: '📌 Channel Link', value: `<#${ticketChannel.id}>`, inline: true },
-            { name: '👤 Target', value: `<@${user.id}>`, inline: true },
-            { name: '🛡️ Officer', value: `<@${creator.id}>`, inline: true },
-            { name: '📝 Reason Given', value: reason, inline: false },
-          ],
-          timestamp: true,
-        }));
-
-        await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(`Strike tracking active inside: <#${ticketChannel.id}>`, '⚡ Strike Ticket Created')],
-        });
-      }
-
-      // ═══════════════════════════════════════════════════════════
-      // CREATE
-      // ═══════════════════════════════════════════════════════════
-      else if (sub === 'create') {
-        if (!categoryId) {
-          throw new Error('Tickets are not set up yet. Run `/ticket setup` first.');
+        // Check ticket limit
+        const maxTickets = guildConfig.maxTicketsPerUser || 3;
+        const currentCount = await getUserTicketCount(interaction.guildId, interaction.user.id);
+        if (currentCount >= maxTickets) {
+          return await interaction.reply({
+            embeds: [errorEmbed(
+              'Ticket Limit Reached',
+              `You have ${currentCount}/${maxTickets} open tickets. Close existing tickets first.`
+            )],
+            flags: MessageFlags.Ephemeral
+          });
         }
 
-        const user = interaction.options.getUser('user');
-        const role = interaction.options.getRole('role');
-
-        if (!user && !role) {
-          throw new Error('You must provide either a user or a role.');
-        }
-
-        const creator = interaction.options.getUser('creator') || interaction.user;
         const reason = interaction.options.getString('reason') || 'No reason provided';
+        const priority = interaction.options.getString('priority') || 'none';
 
-        const category = interaction.guild.channels.cache.get(categoryId);
-        if (!category) {
-          throw new Error('Ticket category not found. Please run `/ticket setup` again.');
-        }
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        const ticketName = user
-          ? `ticket-${user.username.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`
-          : `ticket-${role.name.toLowerCase().replace(/[^a-z0-9]/g, '-').slice(0, 20)}`;
-
-        const overwrites = [
-          {
-            id: interaction.guild.roles.everyone.id,
-            deny: [PermissionFlagsBits.ViewChannel],
-          },
-          {
-            id: creator.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-          },
-          {
-            id: client.user.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory, PermissionFlagsBits.ManageChannels],
-          },
-        ];
-
-        if (user) {
-          overwrites.push({
-            id: user.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-          });
-        }
-
-        if (role) {
-          overwrites.push({
-            id: role.id,
-            allow: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.SendMessages, PermissionFlagsBits.ReadMessageHistory],
-          });
-        }
-
-        const ticketChannel = await interaction.guild.channels.create({
-          name: ticketName,
-          type: ChannelType.GuildText,
-          parent: categoryId,
-          permissionOverwrites: overwrites,
-        });
-
-        const target = user ? `<@${user.id}>` : `<@&${role.id}>`;
-
-        const embedDescription = user
-          ? `This is a personal ticket for <@${user.id}> with <@${creator.id}>`
-          : `This is a role ticket for <@&${role.id}> created by <@${creator.id}>`;
-
-        const embed = createEmbed({
-          title: '🎫 Personal Ticket',
-          description: embedDescription,
-          color: 'info',
-          fields: [
-            { name: user ? '👤 User' : '🎭 Role', value: target, inline: true },
-            { name: '🙋 Created by', value: `<@${creator.id}>`, inline: true },
-            { name: '📝 Reason', value: reason, inline: false },
-          ],
-          footer: { text: `Ticket created by ${interaction.user.tag}` },
-          timestamp: true,
-        });
-
-        const row = new ActionRowBuilder().addComponents(
-          new ButtonBuilder()
-            .setCustomId(`ticket_close:${creator.id}`)
-            .setLabel('🔒 Close Ticket')
-            .setStyle(ButtonStyle.Danger)
+        const result = await createTicket(
+          interaction.guild,
+          interaction.member,
+          categoryId,
+          reason,
+          priority
         );
 
-        await ticketChannel.send({
-          content: target,
-          embeds: [embed],
-          components: [row],
-        });
-
-        await logToChannel(interaction.guild, logChannelId, createEmbed({
-          title: '🎫 Ticket Created',
-          color: 'info',
-          fields: [
-            { name: '📌 Channel', value: `<#${ticketChannel.id}>`, inline: true },
-            { name: user ? '👤 User' : '🎭 Role', value: target, inline: true },
-            { name: '🙋 Creator', value: `<@${creator.id}>`, inline: true },
-            { name: '📝 Reason', value: reason, inline: false },
-            { name: '🔧 Created by', value: `<@${interaction.user.id}>`, inline: true },
-          ],
-          timestamp: true,
-        }));
-
-        await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(
-            `Ticket created: <#${ticketChannel.id}>`,
-            '✅ Ticket Created'
-          )],
-        });
+        if (result.success) {
+          await interaction.editReply({
+            embeds: [successEmbed('Ticket Created', `Your ticket has been created in ${result.channel}!`)],
+          });
+        } else {
+          await interaction.editReply({
+            embeds: [errorEmbed('Error', result.error || 'Failed to create ticket.')],
+          });
+        }
       }
 
-      // ═══════════════════════════════════════════════════════════
-      // BRING
-      // ═══════════════════════════════════════════════════════════
-      else if (sub === 'bring') {
-        if (interaction.channel.parentId !== categoryId) {
-          throw new Error('This command can only be used inside a ticket channel.');
+      // ═══════════════════════════════════════
+      // CREATE FOR (Staff)
+      // ═══════════════════════════════════════
+      else if (sub === 'createfor') {
+        if (!categoryId) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Not Set Up', 'Run `/ticket setup` first.')],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        const targetUser = interaction.options.getUser('user');
+        const reason = interaction.options.getString('reason') || 'No reason provided';
+        const priority = interaction.options.getString('priority') || 'none';
+
+        // Check target user's ticket limit
+        const maxTickets = guildConfig.maxTicketsPerUser || 3;
+        const currentCount = await getUserTicketCount(interaction.guildId, targetUser.id);
+        if (currentCount >= maxTickets) {
+          return await interaction.reply({
+            embeds: [errorEmbed(
+              'Ticket Limit Reached',
+              `${targetUser} has ${currentCount}/${maxTickets} open tickets.`
+            )],
+            flags: MessageFlags.Ephemeral
+          });
+        }
+
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+
+        // Get the target user as a GuildMember
+        const targetMember = await interaction.guild.members.fetch(targetUser.id).catch(() => null);
+        if (!targetMember) {
+          return await interaction.editReply({
+            embeds: [errorEmbed('Error', 'Could not find that user in this server.')],
+          });
+        }
+
+        const result = await createTicket(
+          interaction.guild,
+          targetMember,
+          categoryId,
+          `Created by ${interaction.user.tag} for ${targetUser.tag}\nReason: ${reason}`,
+          priority
+        );
+
+        if (result.success) {
+          await interaction.editReply({
+            embeds: [successEmbed('Ticket Created', `Ticket for ${targetUser} created in ${result.channel}!`)],
+          });
+        } else {
+          await interaction.editReply({
+            embeds: [errorEmbed('Error', result.error || 'Failed to create ticket.')],
+          });
+        }
+      }
+
+      // ═══════════════════════════════════════
+      // STRIKE TICKET
+      // ═══════════════════════════════════════
+      else if (sub === 'strike') {
+        if (!categoryId) {
+          return await interaction.reply({
+            embeds: [errorEmbed('Not Set Up', 'Run `/ticket setup` first.')],
+            flags: MessageFlags.Ephemeral
+          });
         }
 
         const user = interaction.options.getUser('user');
+        const reason = interaction.options.getString('reason');
 
-        await interaction.channel.permissionOverwrites.create(user.id, {
-          ViewChannel: true,
-          SendMessages: true,
-          ReadMessageHistory: true,
-        });
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
 
-        await interaction.channel.send({
-          content: `<@${user.id}>`,
-          embeds: [createEmbed({
-            title: '➕ User Added',
-            description: `<@${user.id}> has been added to this ticket by <@${interaction.user.id}>.`,
-            color: 'info',
-            timestamp: true,
-          })],
-        });
-
-        await logToChannel(interaction.guild, logChannelId, createEmbed({
-          title: '➕ User Added to Ticket',
-          color: 'info',
-          fields: [
-            { name: '📌 Channel', value: `<#${interaction.channel.id}>`, inline: true },
-            { name: '👤 User Added', value: `<@${user.id}>`, inline: true },
-            { name: '🔧 By', value: `<@${interaction.user.id}>`, inline: true },
-          ],
-          timestamp: true,
-        }));
-
-        await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(`<@${user.id}> has been added to the ticket.`, '✅ User Added')],
-        });
-      }
-
-      // ═══════════════════════════════════════════════════════════
-      // REMOVE
-      // ═══════════════════════════════════════════════════════════
-      else if (sub === 'remove') {
-        if (interaction.channel.parentId !== categoryId) {
-          throw new Error('This command can only be used inside a ticket channel.');
+        // Get the target user as a GuildMember
+        const targetMember = await interaction.guild.members.fetch(user.id).catch(() => null);
+        if (!targetMember) {
+          return await interaction.editReply({
+            embeds: [errorEmbed('Error', 'Could not find that user in this server.')],
+          });
         }
 
-        const user = interaction.options.getUser('user');
+        const strikeReason = `⚠️ STRIKE ISSUED by ${interaction.user.tag}\n👤 User: ${user.tag}\n📝 Reason: ${reason}`;
+        
+        const result = await createTicket(
+          interaction.guild,
+          targetMember,
+          categoryId,
+          strikeReason,
+          'high' // Strikes default to high priority
+        );
 
-        await interaction.channel.permissionOverwrites.create(user.id, {
-          ViewChannel: false,
-          SendMessages: false,
-          ReadMessageHistory: false,
-          AddReactions: false,
-          AttachFiles: false,
-          EmbedLinks: false,
-        });
-
-        try {
-          await interaction.channel.permissionOverwrites.delete(user.id);
-        } catch {}
-
-        await interaction.channel.send({
-          embeds: [createEmbed({
-            title: '➖ User Removed',
-            description: `<@${user.id}> has been removed from this ticket by <@${interaction.user.id}>.`,
-            color: 'warning',
-            timestamp: true,
-          })],
-        });
-
-        await logToChannel(interaction.guild, logChannelId, createEmbed({
-          title: '➖ User Removed from Ticket',
-          color: 'warning',
-          fields: [
-            { name: '📌 Channel', value: `<#${interaction.channel.id}>`, inline: true },
-            { name: '👤 User Removed', value: `<@${user.id}>`, inline: true },
-            { name: '🔧 By', value: `<@${interaction.user.id}>`, inline: true },
-          ],
-          timestamp: true,
-        }));
-
-        await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed(`<@${user.id}> has been removed from the ticket.`, '✅ User Removed')],
-        });
-      }
-
-      // ═══════════════════════════════════════════════════════════
-      // DELETE
-      // ═══════════════════════════════════════════════════════════
-      else if (sub === 'delete') {
-        if (interaction.channel.parentId !== categoryId) {
-          throw new Error('This command can only be used inside a ticket channel.');
-        }
-
-        await interaction.channel.send({
-          embeds: [createEmbed({
-            title: '🗑️ Ticket Closing',
-            description: `This ticket is being deleted by <@${interaction.user.id}>.\nGenerating transcript and deleting in **5 seconds**.`,
+        if (result.success) {
+          // Send the strike notification in the ticket
+          const strikeEmbed = createEmbed({
+            title: '⚡ Infraction Strike Logged',
+            description: `An official strike has been recorded for ${user}.`,
             color: 'error',
+            fields: [
+              { name: '👤 User', value: `${user}`, inline: true },
+              { name: '🛡️ Issuing Officer', value: `${interaction.user}`, inline: true },
+              { name: '📝 Reason', value: reason, inline: false },
+            ],
             timestamp: true,
-          })],
-        });
+          });
 
-        await InteractionHelper.safeEditReply(interaction, {
-          embeds: [successEmbed('Transcript will be saved and ticket deleted in 5 seconds.', '🗑️ Deleting Ticket')],
-        });
+          await result.channel.send({
+            content: `${user}`,
+            embeds: [strikeEmbed],
+          });
 
-        const transcriptText = await generateTranscript(interaction.channel);
-        const transcriptFile = new AttachmentBuilder(
-          Buffer.from(transcriptText, 'utf-8'),
-          { name: `transcript-${interaction.channel.name}-${Date.now()}.txt` }
-        );
+          await interaction.editReply({
+            embeds: [successEmbed('Strike Ticket Created', `Strike tracking active in ${result.channel}`)],
+          });
+        } else {
+          await interaction.editReply({
+            embeds: [errorEmbed('Error', result.error || 'Failed to create strike ticket.')],
+          });
+        }
+      }
 
-        await logToChannel(interaction.guild, logChannelId, createEmbed({
-          title: '🗑️ Ticket Deleted',
-          color: 'error',
-          fields: [
-            { name: '📌 Channel', value: `#${interaction.channel.name}`, inline: true },
-            { name: '🔧 Deleted by', value: `<@${interaction.user.id}>`, inline: true },
-            { name: '🕐 Deleted at', value: `<t:${Math.floor(Date.now() / 1000)}:F>`, inline: true },
-          ],
-          footer: { text: 'Transcript attached below' },
-          timestamp: true,
-        }), transcriptFile);
+      // ═══════════════════════════════════════
+      // CLAIM TICKET
+      // ═══════════════════════════════════════
+      else if (sub === 'claim') {
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        
+        const result = await claimTicket(interaction.channel, interaction.user);
+        
+        if (result.success) {
+          await interaction.editReply({
+            embeds: [successEmbed('Ticket Claimed', 'You have successfully claimed this ticket!')],
+          });
+        } else {
+          await interaction.editReply({
+            embeds: [errorEmbed('Error', result.error || 'Failed to claim ticket.')],
+          });
+        }
+      }
 
-        setTimeout(async () => {
-          try {
-            await interaction.channel.delete(`Ticket deleted by ${interaction.user.tag}`);
-          } catch (err) {
-            logger.error('Failed to delete ticket channel:', err);
-          }
-        }, 5000);
+      // ═══════════════════════════════════════
+      // PRIORITY
+      // ═══════════════════════════════════════
+      else if (sub === 'priority') {
+        const priority = interaction.options.getString('level');
+        
+        await interaction.deferReply({ flags: MessageFlags.Ephemeral });
+        
+        const result = await updateTicketPriority(interaction.channel, priority, interaction.user);
+        
+        if (result.success) {
+          await interaction.editReply({
+            embeds: [successEmbed('Priority Updated', `Ticket priority set to ${priority}.`)],
+          });
+        } else {
+          await interaction.editReply({
+            embeds: [errorEmbed('Error', result.error || 'Failed to update priority.')],
+          });
+        }
       }
 
     } catch (error) {

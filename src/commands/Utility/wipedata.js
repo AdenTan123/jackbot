@@ -2,7 +2,6 @@
 console.log('[Command] wipedata.js loaded');
 
 import { SlashCommandBuilder, MessageFlags, EmbedBuilder } from 'discord.js';
-import { PrismaClient } from '@prisma/client';
 import { warningEmbed } from '../../utils/embeds.js';
 import { getConfirmationButtons } from '../../utils/components.js';
 import { logger } from '../../utils/logger.js';
