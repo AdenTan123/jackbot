@@ -1,62 +1,29 @@
 import {
   SlashCommandBuilder,
   PermissionFlagsBits,
-  ChannelType,
   MessageFlags,
 } from 'discord.js';
 import { createEmbed, errorEmbed, successEmbed } from '../../utils/embeds.js';
 import { logger } from '../../utils/logger.js';
 import { InteractionHelper } from '../../utils/interactionHelper.js';
 import { handleInteractionError } from '../../utils/errorHandler.js';
-import { getGuildConfig, updateGuildConfig } from '../../services/guildConfig.js';
-import {
-  createTicket,
-  getUserTicketCount,
-} from '../../services/ticket.js';
+import { createTicket, getUserTicketCount } from '../../services/ticket.js';
 import { checkRateLimit } from '../../utils/rateLimiter.js';
 
-// ─── Helper to check if we’re inside a ticket channel ───
-function inTicketChannel(interaction, categoryId, closedCategoryId) {
-  if (!interaction.channel) return false;
-  const parent = interaction.channel.parentId;
-  return (categoryId && parent === categoryId) ||
-         (closedCategoryId && parent === closedCategoryId);
+// ─── Hardcoded Configurations ───
+const TICKET_CATEGORY_ID = '1514526048430198895';
+const TICKET_LOG_CHANNEL_ID = '1514528044801327147';
+const MAX_TICKETS_PER_USER = 3;
+
+// Helper to check if we’re inside a ticket channel
+function inTicketChannel(interaction) {
+  return interaction.channel && interaction.channel.parentId === TICKET_CATEGORY_ID;
 }
 
 export default {
   data: new SlashCommandBuilder()
     .setName('ticket')
-    .setDescription('Ticket system (multiguild)')
-    // ── /ticket setup ──
-    .addSubcommand(sub => sub
-      .setName('setup')
-      .setDescription('Configure the ticket system')
-      .addChannelOption(o =>
-        o.setName('category')
-         .setDescription('Category where tickets are created')
-         .setRequired(true))
-      .addChannelOption(o =>
-        o.setName('log_channel')
-         .setDescription('Channel for ticket logs (optional)')
-         .setRequired(false))
-      .addChannelOption(o =>
-        o.setName('closed_category')
-         .setDescription('Category for closed tickets (optional)')
-         .setRequired(false))
-      .addChannelOption(o =>
-        o.setName('transcript_channel')
-         .setDescription('Channel for transcripts (optional)')
-         .setRequired(false))
-      .addRoleOption(o =>
-        o.setName('staff_role')
-         .setDescription('Role that can manage tickets (optional)')
-         .setRequired(false))
-      .addIntegerOption(o =>
-        o.setName('max_tickets')
-         .setDescription('Max open tickets per user (default 3)')
-         .setRequired(false)
-         .setMinValue(1)
-         .setMaxValue(10)))
+    .setDescription('Ticket system')
     // ── /ticket create (staff) ──
     .addSubcommand(sub => sub
       .setName('create')
@@ -76,10 +43,6 @@ export default {
       .addStringOption(o =>
         o.setName('reason')
          .setDescription('Reason for the ticket')
-         .setRequired(false))
-      .addStringOption(o =>
-        o.setName('priority')
-         .setDescription('Priority level (optional)')
          .setRequired(false)))
     // ── /ticket open (self) ──
     .addSubcommand(sub => sub
@@ -89,7 +52,7 @@ export default {
         o.setName('reason')
          .setDescription('Reason for the ticket')
          .setRequired(false)))
-    // ── /ticket bring / remove / claim / priority ──
+    // ── Management Subcommands ──
     .addSubcommand(sub => sub
       .setName('bring')
       .setDescription('Add a user to this ticket')
@@ -102,12 +65,8 @@ export default {
       .setName('claim')
       .setDescription('Claim this ticket'))
     .addSubcommand(sub => sub
-      .setName('priority')
-      .setDescription('Update ticket priority')
-      .addStringOption(o => 
-        o.setName('level')
-         .setDescription('Priority level')
-         .setRequired(true)))
+      .setName('close')
+      .setDescription('Close and delete this ticket channel permanently'))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels),
 
   category: 'moderation',
@@ -117,112 +76,18 @@ export default {
 
     try {
       // ─────────────────────────────────────────────
-      //  SETUP – saves directly to the guild config
-      // ─────────────────────────────────────────────
-      if (sub === 'setup') {
-        const category = interaction.options.getChannel('category');
-        const logChannel = interaction.options.getChannel('log_channel');
-        const closedCategory = interaction.options.getChannel('closed_category');
-        const transcriptChannel = interaction.options.getChannel('transcript_channel');
-        const staffRole = interaction.options.getRole('staff_role');
-        const maxTickets = interaction.options.getInteger('max_tickets');
-
-        if (category.type !== ChannelType.GuildCategory) {
-          return interaction.reply({
-            embeds: [errorEmbed('Invalid Channel', 'The category must be a category channel.')],
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-
-        // Build the updates object
-        const updates = { ticketCategoryId: category.id };
-        if (logChannel)           updates.ticketLogChannelId = logChannel.id;
-        if (closedCategory)       updates.ticketClosedCategoryId = closedCategory.id;
-        if (transcriptChannel)    updates.ticketTranscriptChannelId = transcriptChannel.id;
-        if (staffRole)            updates.ticketStaffRoleId = staffRole.id;
-        if (maxTickets)           updates.maxTicketsPerUser = maxTickets;
-
-        const configKey = `guild:${interaction.guildId}:config`;   // the key used by database.js
-
-        try {
-          // Fetch existing raw config (or start with empty object)
-          let current = {};
-          try {
-            const raw = await client.db.get(configKey, {});
-            if (raw && typeof raw === 'object') current = raw;
-          } catch (_) {}
-
-          // Merge and save directly (bypasses any schema validation)
-          const merged = { ...current, ...updates };
-          await client.db.set(configKey, merged);
-
-          // Build a nice success embed
-          const fields = [{ name: '📁 Category', value: category.name, inline: true }];
-          if (logChannel)        fields.push({ name: '📋 Log Channel', value: `<#${logChannel.id}>`, inline: true });
-          if (closedCategory)    fields.push({ name: '🔒 Closed Category', value: closedCategory.name, inline: true });
-          if (transcriptChannel) fields.push({ name: '📜 Transcript Channel', value: `<#${transcriptChannel.id}>`, inline: true });
-          if (staffRole)         fields.push({ name: '👥 Staff Role', value: `<@&${staffRole.id}>`, inline: true });
-          if (maxTickets)        fields.push({ name: '🎫 Max Tickets/User', value: String(maxTickets), inline: true });
-
-          return interaction.reply({
-            embeds: [createEmbed({
-              title: '✅ Ticket System Configured',
-              description: 'The ticket system is now ready.\nUse `/ticket open` or `/ticket create`.',
-              color: 'success',
-              fields,
-              timestamp: true,
-            })],
-            flags: MessageFlags.Ephemeral,
-          });
-        } catch (err) {
-          logger.error('[ticket setup] Direct DB save failed:', err);
-          return interaction.reply({
-            embeds: [errorEmbed('Setup Failed', `Database error: ${err.message}`)],
-            flags: MessageFlags.Ephemeral,
-          });
-        }
-      }
-
-      // ─────────────────────────────────────────────
-      //  For all other commands, load config normally
-      // ─────────────────────────────────────────────
-      let guildConfig = {};
-      try {
-        guildConfig = await getGuildConfig(client, interaction.guildId);
-      } catch (e) {
-        logger.warn('[ticket] Could not load config, using empty:', e);
-      }
-      const categoryId = guildConfig.ticketCategoryId || null;
-      const closedCategoryId = guildConfig.ticketClosedCategoryId || null;
-
-      // Quick helper to bail if not set up
-      const requireSetup = () => {
-        if (!categoryId) {
-          interaction.reply({
-            embeds: [errorEmbed('Not Set Up', 'Run `/ticket setup` first.')],
-            flags: MessageFlags.Ephemeral,
-          });
-          return false;
-        }
-        return true;
-      };
-
-      // ─────────────────────────────────────────────
       //  /ticket open  (self‑creation)
       // ─────────────────────────────────────────────
       if (sub === 'open') {
-        if (!requireSetup()) return;
-
-        const maxTickets = guildConfig.maxTicketsPerUser ?? 3;
         const currentCount = await getUserTicketCount(interaction.guildId, interaction.user.id).catch(() => 0);
-        if (currentCount >= maxTickets) {
+        if (currentCount >= MAX_TICKETS_PER_USER) {
           return interaction.reply({
-            embeds: [errorEmbed('Ticket Limit', `You have ${currentCount}/${maxTickets} open tickets.`)],
+            embeds: [errorEmbed('Ticket Limit', `You have ${currentCount}/${MAX_TICKETS_PER_USER} open tickets.`)],
             flags: MessageFlags.Ephemeral,
           });
         }
 
-        // Rate limiting (safe)
+        // Rate limiting
         const allowed = await checkRateLimit(`${interaction.user.id}:create_ticket`, 3, 60000).catch(() => true);
         if (!allowed) {
           return interaction.reply({
@@ -236,7 +101,7 @@ export default {
         const deferSuccess = await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
         if (!deferSuccess) return;
 
-        const result = await createTicket(interaction.guild, interaction.member, categoryId, reason);
+        const result = await createTicket(interaction.guild, interaction.member, TICKET_CATEGORY_ID, reason);
         if (result.success) {
           await InteractionHelper.safeEditReply(interaction, {
             embeds: [successEmbed('Ticket Created', `Your ticket is ready in ${result.channel}!`)],
@@ -252,13 +117,10 @@ export default {
       //  /ticket create  (staff for user/role)
       // ─────────────────────────────────────────────
       else if (sub === 'create') {
-        if (!requireSetup()) return;
-
         const user = interaction.options.getUser('user');
         const role = interaction.options.getRole('role');
         const creator = interaction.options.getUser('creator') || interaction.user;
         const reason = interaction.options.getString('reason') || 'No reason provided';
-        const priority = interaction.options.getString('priority') || 'none';
 
         if (!user && !role) {
           return interaction.reply({
@@ -270,7 +132,6 @@ export default {
         const deferSuccess = await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
         if (!deferSuccess) return;
 
-        // Determine the ticket “owner” (the member who gets the ticket)
         let targetMember;
         if (user) {
           targetMember = await interaction.guild.members.fetch(user.id).catch(() => null);
@@ -280,33 +141,28 @@ export default {
             });
           }
 
-          // Check target’s ticket limit
-          const maxTickets = guildConfig.maxTicketsPerUser ?? 3;
           const currentCount = await getUserTicketCount(interaction.guildId, user.id).catch(() => 0);
-          if (currentCount >= maxTickets) {
+          if (currentCount >= MAX_TICKETS_PER_USER) {
             return InteractionHelper.safeEditReply(interaction, {
-              embeds: [errorEmbed('Ticket Limit', `${user} has ${currentCount}/${maxTickets} open tickets.`)],
+              embeds: [errorEmbed('Ticket Limit', `${user} has ${currentCount}/${MAX_TICKETS_PER_USER} open tickets.`)],
             });
           }
         } else {
-          // Role ticket → the creator becomes the “owner” for the ticket service
           targetMember = interaction.member;
         }
 
-        // Build a descriptive reason
         let fullReason = reason;
         if (user && role) fullReason = `Ticket for ${user.tag} and role ${role.name}\nStaff: ${interaction.user.tag}\nReason: ${reason}`;
         else if (user)    fullReason = `Ticket for ${user.tag}\nStaff: ${interaction.user.tag}\nReason: ${reason}`;
         else if (role)    fullReason = `Role ticket for ${role.name}\nStaff: ${interaction.user.tag}\nReason: ${reason}`;
 
-        const result = await createTicket(interaction.guild, targetMember, categoryId, fullReason, priority);
+        const result = await createTicket(interaction.guild, targetMember, TICKET_CATEGORY_ID, fullReason);
         if (!result.success) {
           return InteractionHelper.safeEditReply(interaction, {
             embeds: [errorEmbed('Error', result.error || 'Failed to create ticket.')],
           });
         }
 
-        // Add the role to the ticket (if specified)
         if (role) {
           await result.channel.permissionOverwrites.create(role, {
             ViewChannel: true,
@@ -316,7 +172,6 @@ export default {
           }).catch(() => {});
         }
 
-        // Add the staff creator if different from the ticket owner
         if (user && creator.id !== user.id) {
           await result.channel.permissionOverwrites.create(creator, {
             ViewChannel: true,
@@ -326,7 +181,6 @@ export default {
           }).catch(() => {});
         }
 
-        // Post an info embed in the ticket
         const infoEmbed = createEmbed({
           title: '🎫 Ticket Created',
           description: `This ticket was created by ${interaction.user} for ${user || role}.`,
@@ -347,10 +201,10 @@ export default {
       }
 
       // ─────────────────────────────────────────────
-      //  BRING / REMOVE / CLAIM / PRIORITY (basic implementations)
+      //  MANAGEMENT COMMANDS (In-channel only)
       // ─────────────────────────────────────────────
-      if (['bring', 'remove', 'claim', 'priority'].includes(sub)) {
-        if (!inTicketChannel(interaction, categoryId, closedCategoryId)) {
+      if (['bring', 'remove', 'claim', 'close'].includes(sub)) {
+        if (!inTicketChannel(interaction)) {
           return interaction.reply({
             embeds: [errorEmbed('Invalid Channel', 'This command can only be used inside a ticket channel.')],
             flags: MessageFlags.Ephemeral,
@@ -396,17 +250,24 @@ export default {
           });
         }
 
-        if (sub === 'priority') {
-          const { updateTicketPriority } = await import('../../services/ticket.js');
-          const level = interaction.options.getString('level');
+        if (sub === 'close') {
           const deferSuccess = await InteractionHelper.safeDefer(interaction, { flags: MessageFlags.Ephemeral });
           if (!deferSuccess) return;
-          const result = await updateTicketPriority(interaction.channel, level, interaction.user);
-          return InteractionHelper.safeEditReply(interaction, {
-            embeds: result.success
-              ? [successEmbed('Priority Updated', `Priority set to ${level}.`)]
-              : [errorEmbed('Error', result.error || 'Failed to update priority.')],
-          });
+
+          // Dispatch audit log before deleting channel
+          const logChannel = interaction.guild.channels.cache.get(TICKET_LOG_CHANNEL_ID);
+          if (logChannel) {
+            const logEmbed = createEmbed({
+              title: '🔒 Ticket Closed & Deleted',
+              description: `Ticket channel **#${interaction.channel.name}** was deleted by ${interaction.user}.`,
+              color: 'danger',
+              timestamp: true,
+            });
+            await logChannel.send({ embeds: [logEmbed] }).catch(() => {});
+          }
+
+          await interaction.channel.delete(`Closed by ${interaction.user.tag}`).catch(() => {});
+          return;
         }
       }
 
