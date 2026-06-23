@@ -20,28 +20,6 @@ import { ensureTypedServiceError } from '../utils/serviceErrorBoundary.js';
 
 
 
-function getPriorityMap() {
-  const priorities = BotConfig.tickets?.priorities || {
-    none: { emoji: "⚪", color: "#95A5A6", label: "None" },
-    low: { emoji: "🟢", color: "#2ECC71", label: "Low" },
-    medium: { emoji: "🟡", color: "#F1C40F", label: "Medium" },
-    high: { emoji: "🔴", color: "#E74C3C", label: "High" },
-    urgent: { emoji: "🚨", color: "#E91E63", label: "Urgent" },
-  };
-  
-  const map = {};
-  for (const [key, config] of Object.entries(priorities)) {
-    map[key] = {
-      name: `${config.emoji} ${config.label.toUpperCase()}`,
-      color: config.color,
-      emoji: config.emoji,
-      label: config.label,
-    };
-  }
-  return map;
-}
-
-const PRIORITY_MAP = getPriorityMap();
 const TICKET_DELETE_DELAY_MS = 3000;
 const TICKET_DELETE_DELAY_SECONDS = Math.floor(TICKET_DELETE_DELAY_MS / 1000);
 
