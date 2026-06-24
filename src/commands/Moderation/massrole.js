@@ -3,24 +3,34 @@ import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.
 export default {
   data: new SlashCommandBuilder()
     .setName('massrole')
-    .setDescription('Add a role to multiple users')
+    .setDescription('Add or remove a role for multiple users')
+    .addStringOption(opt =>
+      opt.setName('action')
+        .setDescription('Whether to add or remove the role')
+        .setRequired(true)
+        .addChoices(
+          { name: 'Add Role', value: 'add' },
+          { name: 'Remove Role', value: 'remove' }
+        ))
+    .addRoleOption(opt =>
+      opt.setName('role')
+        .setDescription('The role to assign or remove')
+        .setRequired(true))
     .addStringOption(opt =>
       opt.setName('users')
         .setDescription('Mention users or provide user IDs separated by spaces')
-        .setRequired(true))
-    .addRoleOption(opt =>
-      opt.setName('role')
-        .setDescription('Role to assign')
         .setRequired(true))
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageRoles),
 
   async execute(interaction) {
     await interaction.deferReply();
 
+    const action = interaction.options.getString('action');
     const role = interaction.options.getRole('role');
     const usersInput = interaction.options.getString('users');
 
-    const userIds = [...usersInput.matchAll(/\d{17,19}/g)].map(m => m[0]);
+    // Extract potential user IDs from inputs (supports mentions like <@123...> and raw IDs)
+    const userIds = [...new Set([...usersInput.matchAll(/\d{17,19}/g)].map(m => m[0]))];
 
     if (!userIds.length) {
       return interaction.editReply('❌ No valid users found. Mention users or provide their IDs.');
@@ -28,7 +38,7 @@ export default {
 
     const botMember = interaction.guild.members.me;
     if (role.position >= botMember.roles.highest.position) {
-      return interaction.editReply('❌ That role is higher than my highest role. I can\'t assign it.');
+      return interaction.editReply("❌ That role is higher than my highest role. I can't manage it.");
     }
 
     const results = { success: [], failed: [] };
@@ -36,24 +46,32 @@ export default {
     for (const userId of userIds) {
       try {
         const member = await interaction.guild.members.fetch(userId);
-        await member.roles.add(role);
+        
+        if (action === 'add') {
+          await member.roles.add(role);
+        } else {
+          await member.roles.remove(role);
+        }
+        
         results.success.push(`<@${userId}>`);
-      } catch {
+      } catch (error) {
         results.failed.push(`<@${userId}>`);
       }
     }
 
+    const actionText = action === 'add' ? 'Added' : 'Removed';
+
     const embed = new EmbedBuilder()
       .setColor(results.failed.length === 0 ? 0x57F287 : 0xFEE75C)
-      .setTitle('Mass Role Assignment')
+      .setTitle(`Mass Role Action: ${actionText}`)
       .addFields(
         { name: '✅ Success', value: results.success.join(', ') || 'None', inline: false },
         { name: '❌ Failed', value: results.failed.join(', ') || 'None', inline: false },
         { name: 'Role', value: `${role}`, inline: true },
-        { name: 'Total', value: `${results.success.length}/${userIds.length}`, inline: true }
+        { name: 'Total Actioned', value: `${results.success.length}/${userIds.length}`, inline: true }
       )
       .setTimestamp();
 
-    interaction.editReply({ embeds: [embed] });
+    await interaction.editReply({ embeds: [embed] });
   }
 };
